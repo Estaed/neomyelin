@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse a commit whose staged files carry personal data (the gate's grep, staged content only).
+# Twice a file the orchestrator wrote passed review and failed the gate later; a check at commit
+# time catches it whoever commits. Enable once per clone: git config core.hooksPath scripts/hooks
+exec python "$(git rev-parse --show-toplevel)/scripts/check_staged.py"

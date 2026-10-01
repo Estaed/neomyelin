@@ -1,0 +1,9 @@
+{
+  "vault": "(install.py writes the vault path here)",
+  "user_name": "Alex",
+  "assistant_name": "Nova",
+  "language": "English",
+  "harnesses": ["claude"],
+  "engine": "auto",
+  "nightly_at": "21:00"
+}

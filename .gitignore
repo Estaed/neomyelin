@@ -1,0 +1,8 @@
+.codex/hooks.json
+# Local caches (format references, scratch downloads)
+.cache/
+__pycache__/
+*.pyc
+.state/
+# Release builds from scripts/release.py
+dist/
