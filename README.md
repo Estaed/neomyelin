@@ -6,12 +6,13 @@ you wrote, and change only when your own behaviour shows it should**. It works t
 Code, Codex and Antigravity.
 
 It is my own second brain, shipped empty: the mechanisms and the folder structure of the system I
-use every day for school, work and life, with none of my data. Nothing else to install first;
-updates come from new NeoMyelin releases.
+use every day for school, work and life, with none of my data. You read and edit it in
+[Obsidian](https://obsidian.md), the free notes app; updates come from new NeoMyelin releases.
 
 ## Easiest install: one folder, one message
 
-1. Make an empty folder for your vault (or use the notes folder you already keep).
+1. Install [Obsidian](https://obsidian.md) and create a new vault in it (or open the notes folder
+   you already keep as a vault). That folder is your vault.
 2. Open that folder in Claude Code, Codex or Antigravity.
 3. Paste:
 
@@ -54,7 +55,7 @@ The report lists skills of your own it found in your harnesses' skill folders; r
 command again with `--adopt-skills` to move them into `.brain/skills/` (backed up first). Then
 approve the hooks once in Codex (`/hooks`) if you use it; Antigravity needs no step (if it asks to
 trust the vault folder, accept). Run `python3 .brain/scripts/doctor.py` (`py -3` on Windows) in
-the vault.
+the vault, and open the vault folder in [Obsidian](https://obsidian.md) (Open folder as vault).
 
 ## Updating
 

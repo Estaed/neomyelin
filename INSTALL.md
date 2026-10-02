@@ -24,6 +24,15 @@ line what you are doing. Stop and report if a check fails; never guess past it.
    change below can be undone: `git add -A && git commit -m "Before NeoMyelin"`. If it is not,
    offer `git init`: the nightly run then commits the vault once a day, so every change stays
    undoable.
+6. Obsidian is where the user reads and edits the vault (no plugin is needed; the brain itself
+   works on the plain Markdown files). A `.obsidian` folder in the vault means it is already an
+   Obsidian vault. Otherwise check whether Obsidian is installed: `winget list --id
+   Obsidian.Obsidian` or `%LOCALAPPDATA%\Programs\Obsidian` on Windows, `/Applications/Obsidian.app`
+   on macOS, `flatpak list` or `snap list obsidian` on Linux. If it is missing, recommend it and
+   offer to install it: `winget install --id Obsidian.Obsidian -e` (Windows), `brew install --cask
+   obsidian` (macOS), `flatpak install flathub md.obsidian.Obsidian` (Linux), or the official page
+   `https://obsidian.md/download` when that package manager is missing. Install only after the
+   user says yes; if they decline, carry on, because every step below works without it.
 
 ## 2. Ask the user four things
 
@@ -138,6 +147,9 @@ and record this install as the vault's first receipt: write
 `{"event_id": "<YYYY-MM-DD>-neomyelin-install", "summary": "[NeoMyelin] Installed (Model: <your model>)", "refs": ["AGENTS.md"]}`
 to a file and run `py -3 brain.py receipt --file <that file> --harness <claude, codex or agy>`
 (Windows; `python3` on macOS and Linux) in the vault; `daily/<today>.md` then shows it.
+
+Last, if Obsidian is installed, tell them to open the vault in it: Open folder as vault, then pick
+this exact folder (not a folder above it, or Obsidian sees the vault as one of its subfolders).
 
 ## Updating
 
