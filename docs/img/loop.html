@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- Source of loop.gif: gif_yap.py html docs/img/loop.html --out docs/img/loop.gif --height 520 -->
+<html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; margin: 0; }
+  body { width: 1100px; height: 520px; background: #0D0D0F; color: #F2F2F2; padding: 30px 40px;
+         font-family: Manrope, "Segoe UI", Arial, sans-serif; }
+  h1 { font-size: 28px; font-weight: 600; }
+  h1 span { color: #FF5A1F; }
+  .sub { font-size: 18px; color: #A1A1AA; margin: 8px 0 22px; }
+  .row { display: grid; grid-template-columns: 56px 300px 1fr; align-items: center; height: 80px;
+         background: #16161A; border: 1px solid #3A3940; border-left: 6px solid #3A3940;
+         margin-top: -1px; padding-right: 20px; }
+  .n { font-family: "JetBrains Mono", Consolas, monospace; font-size: 22px; text-align: center; color: #8B8B94; }
+  .t { font-size: 23px; font-weight: 600; color: #A1A1AA; }
+  .t small { display: block; font-size: 14px; letter-spacing: .06em; color: #8B8B94; margin-bottom: 3px; }
+  .d { font-size: 20px; color: #A1A1AA; line-height: 1.3; }
+  .row.done { border-left-color: #FF5A1F; }
+  .row.done .t { color: #F2F2F2; }
+  .row.on { border-left-color: #FF5A1F; background: #212026; }
+  .row.on .n, .row.on .t small { color: #FF7A45; } .row.on .t, .row.on .d { color: #F2F2F2; }
+  .back { margin-top: 16px; font-size: 20px; color: #8B8B94; }
+  .back.on { color: #FF7A45; }
+</style></head><body>
+<h1>The loop that makes the assistant <span>remember</span></h1>
+<div class="sub">Plain Markdown in one folder; the same in Claude Code, Codex and Antigravity.</div>
+<div id="rows"></div>
+<div class="back" id="back">&#8634; The next session starts with all of it.</div>
+<script>
+const stages = [
+  ["SESSION START", "It knows you", "Who you are, your rules, its personality, the last receipt, what is due"],
+  ["EVERY PROMPT", "It finds what you wrote", "Recall attaches the notes that touch the question"],
+  ["WORK ENDS", "A receipt", "Each finished piece of work is recorded; open work becomes a task"],
+  ["NIGHTLY", "It learns, slowly", "Friction twice: a fix proposed in Evolution.md. Seen on 3 days: a Personality line"],
+];
+document.getElementById('rows').innerHTML = stages.map((s, i) =>
+  `<div class="row" data-i="${i}"><div class="n">${i + 1}</div>` +
+  `<div class="t"><small>${s[0]}</small>${s[1]}</div><div class="d">${s[2]}</div></div>`).join('');
+window.STEPS = 5;
+window.step = (n) => {
+  document.querySelectorAll('.row').forEach(r => {
+    const i = +r.dataset.i;
+    r.classList.toggle('on', i === n);
+    r.classList.toggle('done', i < n || n === 4);
+  });
+  document.getElementById('back').classList.toggle('on', n === 4);
+};
+step(4);
+</script>
+</body></html>

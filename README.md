@@ -1,15 +1,27 @@
 # 🧠 NeoMyelin
 
-A second brain for the AI assistant you already use. Your notes, receipts and tasks live in plain
-Markdown in one folder; NeoMyelin makes the assistant that works on them **remember you, find what
-you wrote, and change only when your own behaviour shows it should**. It works the same in Claude
-Code, Codex and Antigravity.
+**Your AI assistant remembers you between sessions, finds what you wrote, and changes only when
+your own behaviour shows it should.**
+
+![A demo vault: install, a session that starts knowing the project, recall on a prompt, a receipt, the health check](docs/img/demo.gif)
+
+Think of a colleague who keeps a notebook about your work. Each morning they reread who you are
+and where you stopped. When you ask something, they open the page that answers it. Each night
+they look at what went wrong twice and suggest a fix. NeoMyelin gives that notebook to the AI
+assistant you already use: Claude Code, Codex or Antigravity.
+
+- **It remembers.** Each session starts with who you are, your rules, the last receipt of the
+  project you are in and what is due. Each prompt brings the notes that touch it.
+- **Your files, in plain Markdown.** Notes, receipts and tasks live in one folder that you read and
+  edit in [Obsidian](https://obsidian.md), the free notes app. They stay on your machine.
+- **It changes only on evidence.** A personality line needs the same thing seen on three different
+  days, with quotes. A fix for repeated friction is proposed; you accept or reject it.
 
 It is my own second brain, shipped empty: the mechanisms and the folder structure of the system I
-use every day for school, work and life, with none of my data. You read and edit it in
-[Obsidian](https://obsidian.md), the free notes app; updates come from new NeoMyelin releases.
+use every day for school, work and life, with none of my data. Updates come from new NeoMyelin
+releases. MIT licensed.
 
-## Easiest install: one folder, one message
+## Install: one folder, one message
 
 1. Install [Obsidian](https://obsidian.md) and create a new vault in it (or open the notes folder
    you already keep as a vault). That folder is your vault.
@@ -23,7 +35,23 @@ The agent asks four things (your name, your assistant's name, the language, the 
 downloads the release and checks its checksum, installs, and walks you through the one trust
 step your client needs.
 
-## What you get
+## How it works
+
+![The loop: session start, every prompt, work ends, nightly](docs/img/loop.gif)
+
+1. **Session start:** a hook prints who you are, your rules, the assistant's personality, the last
+   receipt of the project you are in and what is due. In any folder, not only the vault.
+2. **Every prompt:** recall attaches the vault notes that touch the question. Pure Python search
+   out of the box; better matches when [Ollama](https://ollama.com) with `bge-m3` is running.
+3. **Work ends:** `brain.py`, a small engine at the vault root, records the finished work as a
+   receipt (secrets in it masked), keeps tasks with their history, and rebuilds a daily log.
+4. **Nightly:** repeated friction becomes a proposed fix in `Evolution.md`; a habit seen on three
+   different days becomes a line in `Personality.md`; lessons a session forgot become knowledge
+   notes. It needs no scheduler: it starts in the background at your first session after the time
+   you chose.
+
+<details>
+<summary>Everything it installs, feature by feature</summary>
 
 | | |
 |---|---|
@@ -38,58 +66,7 @@ step your client needs.
 | **Guard rails** | A receipt reminder at the end of real work, and two gates that refuse silent damage (a git command that wipes the working tree, a shell heredoc that mangles backslashes). |
 | **Health and quota** | `doctor.py` checks the whole layer and the session start tells you when something broke; `limit` shows Claude, Codex and Antigravity quota from any folder; an optional two-line status line for Claude Code. |
 
-The nightly run needs no scheduler: it starts in the background at your first session after the
-time you chose.
-
-## Manual install
-
-From an unpacked [release](https://github.com/Estaed/neomyelin/releases/latest) (check the ZIP
-against its `.sha256`), with your own names in a copy of `templates/config.example.json`:
-
-```sh
-python3 install.py --vault "/path/to/vault" --config my-config.json        # macOS / Linux
-py -3 install.py --vault "C:\Notes\MyVault" --config my-config.json --statusline   # Windows
-```
-
-The report lists skills of your own it found in your harnesses' skill folders; run the same
-command again with `--adopt-skills` to move them into `.brain/skills/` (backed up first). Then
-approve the hooks once in Codex (`/hooks`) if you use it; Antigravity needs no step (if it asks to
-trust the vault folder, accept). Run `python3 .brain/scripts/doctor.py` (`py -3` on Windows) in
-the vault, and open the vault folder in [Obsidian](https://obsidian.md) (Open folder as vault).
-
-## Updating
-
-Run the install again from the new release, without `--config`: it reuses the vault's own
-`.brain/config.json`.
-
-```sh
-python3 install.py --vault "/path/to/vault"        # macOS / Linux
-py -3 install.py --vault "C:\Notes\MyVault"        # Windows
-```
-
-It is idempotent: unchanged files are not rewritten, every settings file it changes is backed up
-first, and your notes, receipts, personality lines and own entries are never touched.
-
-## Uninstalling
-
-From an unpacked release (download it again if you deleted it after installing):
-
-```sh
-python3 uninstall.py --vault "/path/to/vault"      # macOS / Linux
-py -3 uninstall.py --vault "C:\Notes\MyVault"      # Windows
-```
-
-It takes back what install wrote outside the vault: its hook entries and status line, the
-instruction block in each harness's instruction file, the skill links and the entry in
-Antigravity's `skills.json`. Each skill it moved into the hub goes back where it came from, as a
-real folder. Your own hooks, text and skills stay, and every file it changes is backed up first.
-
-**Moving or deleting the vault:** uninstall first, then move it and install again from the new
-place. The hooks name the vault's path; if the folder is gone, Claude Code refuses every prompt
-until they are removed. Already moved or deleted it? Run `uninstall.py --vault <the old path>`:
-it works without the folder and removes everything that points at it.
-The vault itself is left as it is, notes, receipts, `.brain/skills/` and all; delete the folder
-yourself if you want it gone.
+</details>
 
 ## What is kept safe
 
@@ -118,6 +95,67 @@ NeoMyelin ships the brain, not the owner's skills (project planning, overnight r
 delegation, design): they change every week and fit one person's way of working. Build your own
 project road on top of the brain; the nightly run turns repeated friction into candidate fixes,
 a patch to one of your skills among them.
+
+## Manual install, updating, uninstalling
+
+<details>
+<summary>Manual install from a release</summary>
+
+From an unpacked [release](https://github.com/Estaed/neomyelin/releases/latest) (check the ZIP
+against its `.sha256`), with your own names in a copy of `templates/config.example.json`:
+
+```sh
+python3 install.py --vault "/path/to/vault" --config my-config.json        # macOS / Linux
+py -3 install.py --vault "C:\Notes\MyVault" --config my-config.json --statusline   # Windows
+```
+
+The report lists skills of your own it found in your harnesses' skill folders; run the same
+command again with `--adopt-skills` to move them into `.brain/skills/` (backed up first). Then
+approve the hooks once in Codex (`/hooks`) if you use it; Antigravity needs no step (if it asks to
+trust the vault folder, accept). Run `python3 .brain/scripts/doctor.py` (`py -3` on Windows) in
+the vault, and open the vault folder in [Obsidian](https://obsidian.md) (Open folder as vault).
+
+</details>
+
+<details>
+<summary>Updating to a new release</summary>
+
+Run the install again from the new release, without `--config`: it reuses the vault's own
+`.brain/config.json`.
+
+```sh
+python3 install.py --vault "/path/to/vault"        # macOS / Linux
+py -3 install.py --vault "C:\Notes\MyVault"        # Windows
+```
+
+It is idempotent: unchanged files are not rewritten, every settings file it changes is backed up
+first, and your notes, receipts, personality lines and own entries are never touched.
+
+</details>
+
+<details>
+<summary>Uninstalling, and moving or deleting the vault</summary>
+
+From an unpacked release (download it again if you deleted it after installing):
+
+```sh
+python3 uninstall.py --vault "/path/to/vault"      # macOS / Linux
+py -3 uninstall.py --vault "C:\Notes\MyVault"      # Windows
+```
+
+It takes back what install wrote outside the vault: its hook entries and status line, the
+instruction block in each harness's instruction file, the skill links and the entry in
+Antigravity's `skills.json`. Each skill it moved into the hub goes back where it came from, as a
+real folder. Your own hooks, text and skills stay, and every file it changes is backed up first.
+
+**Moving or deleting the vault:** uninstall first, then move it and install again from the new
+place. The hooks name the vault's path; if the folder is gone, Claude Code refuses every prompt
+until they are removed. Already moved or deleted it? Run `uninstall.py --vault <the old path>`:
+it works without the folder and removes everything that points at it.
+The vault itself is left as it is, notes, receipts, `.brain/skills/` and all; delete the folder
+yourself if you want it gone.
+
+</details>
 
 ## Credits
 
