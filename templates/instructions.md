@@ -41,7 +41,8 @@ apply, one line each: `OBSERVATION: ...` (a tendency in {user}'s own behaviour),
 quotes {user}'s own words in double quotes, a phrase of a few words: these lines are the only
 evidence {assistant}'s personality grows from. Then short bullets under bold labels, one sentence
 each, never a paragraph: `**Done**`, `**Decisions**`, `**Learning**`, `**Open**` (skip an empty
-group). `**Learning**` holds a durable lesson or a question {user} asked whose answer is worth
+group). These labels and the line prefixes above stay in English whatever language you write the
+rest in: the brain's scripts find them by these exact words. `**Learning**` holds a durable lesson or a question {user} asked whose answer is worth
 keeping; each one also becomes a knowledge note in the same session. Skip greetings and trivia; a
 session whose prompt contains `[no-record]` is not recorded.
 

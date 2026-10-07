@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from helpers import make_vault, receipt, write_config
+from helpers import make_vault, receipt, write, write_config
 
 import agy_hook
 import receipt_gate
@@ -139,6 +139,37 @@ class ReceiptReminderTests(unittest.TestCase):
                 refs=['AGENTS.md'], created_at='2026-10-01T10:00:00+00:00', session=session_value('conv2'))
         self.assertEqual(receipt_gate.agy_reminder('conv2'), '')
 
+    def learning_receipt(self, session: str, body: str) -> None:
+        receipt(self.vault, hashlib.sha256(body.encode('utf-8')).hexdigest(), body, kind='receipt',
+                event_id=session, harness='claude', refs=['AGENTS.md'],
+                created_at='2026-10-01T10:00:00+00:00', session=session_value(session))
+
+    def test_a_receipt_with_a_learning_and_no_note_is_reminded_once(self):
+        self.prompt('Why does the nightly push fail?', session='l1')
+        self.edit(session='l1', times=3)
+        self.learning_receipt('l1', '[Garden] push fixed (Model: m)\n**Done**\n- Fixed it.\n'
+                                    '**Learning**\n- A hand-added remote has no upstream.')
+        answer = self.stop(session='l1')
+        self.assertTrue(answer['reason'].startswith('[Memory: Learning]'), answer)
+        self.assertIn(f'`{self.vault.as_posix()}/knowledge/concepts/`', answer['reason'])
+        self.assertIsNone(self.stop(session='l1'))
+
+    def test_no_learning_reminder_after_a_note_or_without_a_learning(self):
+        self.prompt('Why does the nightly push fail?', session='l2')
+        self.learning_receipt('l2', '[Garden] push fixed (Model: m)\n**Learning**\n- Upstream is missing.')
+        write(self.vault / 'knowledge' / 'concepts' / 'upstream.md', '# Upstream\n')
+        self.assertIsNone(self.stop(session='l2'))
+        self.prompt('Rename the loader.', session='l3')
+        self.learning_receipt('l3', '[Garden] rename (Model: m)\n**Done**\n- Renamed.')
+        self.assertIsNone(self.stop(session='l3'))
+
+    def test_agy_queues_the_learning_reminder_and_a_receipt_does_not_cancel_it(self):
+        receipt_gate.respond('agy', 'Stop', json.dumps({'conversationId': 'conv3', 'fullyIdle': True}))
+        self.learning_receipt('conv3', '[Garden] done (Model: m)\n**Learning** Water at dawn.')
+        receipt_gate.respond('agy', 'Stop', json.dumps({'conversationId': 'conv3', 'fullyIdle': True}))
+        self.assertTrue(receipt_gate.agy_reminder('conv3').startswith('[Memory: Learning]'))
+        self.assertEqual(receipt_gate.agy_reminder('conv3'), '')
+
     def test_main_prints_the_block_and_a_bad_call_exits_1_never_2(self):
         self.edit(session='m', times=3)
         stdin = io.TextIOWrapper(io.BytesIO(json.dumps({'session_id': 'm'}).encode('utf-8')), encoding='utf-8')
@@ -151,6 +182,67 @@ class ReceiptReminderTests(unittest.TestCase):
                 self.assertRaises(SystemExit) as raised:
             receipt_gate.main(['--harness', 'claude'])
         self.assertEqual(raised.exception.code, 1)
+
+
+class LanguageReminderTests(unittest.TestCase):
+    """The vault is set to Spanish; the user writes in Spanish (or another language)."""
+
+    REPLY = ('I changed the installer so that it asks for the repository address. The nightly run '
+             'then commits and pushes the vault once a day, and the first push sets the upstream. '
+             'I ran the tests and they pass; the gate is clean.')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.vault, self.cfg = make_vault(base, language='Español')
+        self.base = base
+        self.state = base / 'receipt-state'
+        for patch in (mock.patch.dict(os.environ, {'NEOMYELIN_CONFIG': str(write_config(base, self.cfg))}),
+                      mock.patch.object(receipt_gate, 'STATE_DIR', self.state)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        os.environ.pop(receipt_gate.INVOKED_ENV, None)
+
+    def turn(self, prompt: str, reply: str, session: str = 'es', harness: str = 'claude', **extra):
+        receipt_gate.respond(harness, 'UserPromptSubmit', json.dumps({'session_id': session, 'prompt': prompt}))
+        return receipt_gate.respond(harness, 'Stop', json.dumps(
+            {'session_id': session, 'last_assistant_message': reply, **extra}))
+
+    def test_an_english_reply_to_a_spanish_prompt_is_sent_back_once(self):
+        answer = self.turn('puedes arreglar el instalador para que pregunte por el repositorio', self.REPLY)
+        self.assertTrue(answer['reason'].startswith("[Memory: Language] Alex wrote in their own language"),
+                        answer)
+        self.assertIsNone(receipt_gate.respond('claude', 'Stop', json.dumps(
+            {'session_id': 'es', 'last_assistant_message': self.REPLY, 'stop_hook_active': True})))
+
+    def test_codex_and_any_other_language_get_it_too(self):
+        answer = self.turn('исправь установщик чтобы он спрашивал адрес репозитория', self.REPLY,
+                           session='ru', harness='codex')
+        self.assertTrue(answer['reason'].startswith('[Memory: Language]'), answer)
+
+    def test_a_reply_in_their_language_an_english_prompt_or_an_english_vault_pass(self):
+        spanish = ('He cambiado el instalador para que pregunte la dirección del repositorio. La ejecución '
+                   'nocturna hace commit y push del vault una vez al día, y el primer push configura el '
+                   'upstream. Ejecuté las pruebas y pasan.')
+        self.assertIsNone(self.turn('puedes arreglar el instalador para que pregunte por el repo', spanish))
+        self.assertIsNone(self.turn('can you fix the installer so that it asks for the address', self.REPLY,
+                                    session='en'))
+        english_cfg = {**self.cfg, 'language': 'English'}
+        with mock.patch.dict(os.environ, {'NEOMYELIN_CONFIG': str(write_config(self.base, english_cfg))}):
+            self.assertIsNone(self.turn('puedes arreglar el instalador para que pregunte por el repo',
+                                        self.REPLY, session='cfg-en'))
+
+    def test_language_and_receipt_reminders_go_out_as_one_block(self):
+        receipt_gate.respond('claude', 'UserPromptSubmit', json.dumps(
+            {'session_id': 'both', 'prompt': 'primero mira el plan del jardín por favor'}))
+        for _ in range(3):
+            receipt_gate.respond('claude', 'PostToolUse', json.dumps({'session_id': 'both', 'tool_name': 'Edit'}))
+        answer = self.turn('ahora arregla el instalador para que pregunte por el repositorio', self.REPLY,
+                           session='both')
+        reason = answer['reason']
+        self.assertTrue(reason.startswith('[Memory: Language]'), reason)
+        self.assertIn('\n\n[Memory: Receipt] Files changed in this session', reason)
 
 
 if __name__ == '__main__':

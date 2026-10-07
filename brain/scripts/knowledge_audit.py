@@ -31,7 +31,7 @@ def _fold(text: str) -> str:
     return re.sub(r'\W+', ' ', ''.join(ch for ch in value if not unicodedata.combining(ch))).strip()
 
 
-def _learnings(body: str) -> list[str]:
+def learnings(body: str) -> list[str]:
     found = []
     inside = False
     for line in body.splitlines():
@@ -66,7 +66,7 @@ def _receipt_items(path: Path) -> tuple[dt.datetime, list[dict]] | None:
         return None
     return stamp, [{'id': f'{path.stem}:{number}', 'receipt': f'receipts/{path.name}',
                     'title': title, 'learning': learning, 'concept_refs': refs}
-                   for number, learning in enumerate(_learnings(body), 1)]
+                   for number, learning in enumerate(learnings(body), 1)]
 
 
 def _read_state(path: Path) -> dict:
@@ -111,7 +111,7 @@ def audit(cfg: dict) -> list[tuple[Path, str]]:
             parts = path.read_text(encoding='utf-8-sig').split('---', 2)
             metadata = json.loads(parts[1])
             refs = [str(ref).replace('\\', '/') for ref in metadata.get('refs', [])]
-            lessons = _learnings(parts[2])
+            lessons = learnings(parts[2])
         except (OSError, ValueError, IndexError, TypeError):
             continue
         for lesson in lessons:

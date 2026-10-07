@@ -137,6 +137,21 @@ for a snap with one line saying so, and still writes the instruction block into 
   value `[Memory: Session]` prints). Once per session, in every harness and folder; `[no-record]`
   in a prompt opts the session out. It names `brain.py receipt --file <json> --harness
   claude|codex|agy`.
+- **Learning reminder** (same script, same Stop): this session's receipt has a `**Learning**`
+  item (the nightly knowledge audit's parser) and no `.md` under `knowledge/concepts/` has an
+  mtime since the session's first event, by whatever tool wrote it. Once per session; agy gets it
+  queued like the receipt reminder, and a receipt arriving meanwhile does not cancel it. The
+  receipt labels stay English in every language (the instruction block says so), because this
+  and the nightly audit match `**Learning**` literally.
+- **Language check** (`language_gate.py`, called from the same hooks): UserPromptSubmit stores
+  whether the human prompt is "not English" (letters mostly outside ASCII, or 4+ words with at
+  most 5% English function words; words shared with other languages, such as "a", "in", "was",
+  are not counted); Stop blocks once when `last_assistant_message` (Claude Code and Codex both
+  send it) is 25+ prose words with 18%+ English function words, and the vault's `language` is
+  not English. Code, paths, URLs and tags are dropped first; short or unclear text decides
+  nothing. Measured on 11 languages and 5 scripts in `tests/unit/test_language_gate.py`, not in
+  a live session. agy's events carry neither text, so agy has no language check. When several
+  reminders are due at one Stop, they go out as one block.
 - **Nightly run:** `memory_context.py --session-start` checks the local `nightly_at` (default
   `21:00`) against `.brain/.state/nightly.last-run`. Once due, it detaches `nightly.py` and returns
   the context without waiting; a launch marker and `nightly.lock` stop overlapping starts. Each
