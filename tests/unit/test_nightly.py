@@ -140,6 +140,32 @@ class NightlyTests(unittest.TestCase):
             self.assertEqual(daily_commit.run(), 0)
         self.assertIn('not a git repository', output.getvalue())
 
+    def test_daily_commit_pushes_to_a_remote_added_after_init(self):
+        # INSTALL.md adds the remote by hand, so the branch has no upstream and a bare `git push`
+        # refuses; the first nightly push has to set it.
+        if shutil.which('git') is None:
+            self.skipTest('git is not installed')
+        remote = self.base / 'remote.git'
+        identity = {'GIT_AUTHOR_NAME': 'Test', 'GIT_AUTHOR_EMAIL': 'test',
+                    'GIT_COMMITTER_NAME': 'Test', 'GIT_COMMITTER_EMAIL': 'test'}
+
+        def git(*args, cwd=self.vault):
+            return subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True,
+                                  encoding='utf-8', check=True).stdout.strip()
+
+        git('init', '--bare', str(remote), cwd=self.base)
+        git('init')
+        git('remote', 'add', 'origin', str(remote))
+        write(self.vault / 'note.md', 'first\n')
+        with mock.patch.dict(os.environ, identity), \
+                mock.patch.object(daily_commit.config, 'load', return_value=self.cfg), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as output:
+            self.assertEqual(daily_commit.run(), 0, output.getvalue())
+            write(self.vault / 'note.md', 'second\n')
+            self.assertEqual(daily_commit.run(), 0, output.getvalue())
+        self.assertEqual(output.getvalue().count('daily push complete'), 2)
+        self.assertEqual(git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD', cwd=remote))
+
 
 class StepArguments(unittest.TestCase):
     """Every nightly step's script accepts the arguments nightly.py passes it.

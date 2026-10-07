@@ -31,9 +31,10 @@ releases. MIT licensed.
 > Read https://raw.githubusercontent.com/Estaed/neomyelin/main/INSTALL.md and install NeoMyelin in
 > this folder. Ask me what you need, and finish by checking it works.
 
-The agent asks four things (your name, your assistant's name, the language, the status line),
-downloads the release and checks its checksum, installs, and walks you through the one trust
-step your client needs.
+The agent asks your name, your assistant's name, the language and the status line, offers to
+install the Claude Code, Codex or Antigravity CLI you lack and to back the vault up to a private
+GitHub repository, downloads the release and checks its checksum, installs, and walks you through
+the one trust step your client needs.
 
 ## How it works
 

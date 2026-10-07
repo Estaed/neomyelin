@@ -59,7 +59,13 @@ def run() -> int:
     if branch.returncode:
         print('daily push skipped: no current branch')
         return 0
-    pushed = git('push')
+    # A remote added by hand after `git init` leaves the branch without an upstream, and a bare
+    # `git push` then refuses every night; the first push sets it.
+    if git('rev-parse', '--abbrev-ref', '@{upstream}').returncode:
+        names = remote.stdout.split()
+        pushed = git('push', '-u', 'origin' if 'origin' in names else names[0], branch.stdout.strip())
+    else:
+        pushed = git('push')
     if pushed.returncode:
         print(f'daily push failed: {pushed.stderr.strip()}')
         return 1

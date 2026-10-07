@@ -21,9 +21,8 @@ line what you are doing. Stop and report if a check fails; never guess past it.
    that folder (and move their notes there), and you install into it. Claude Code works from
    either path.
 5. If the folder is a git repository, make a checkpoint commit of its current state so every
-   change below can be undone: `git add -A && git commit -m "Before NeoMyelin"`. If it is not,
-   offer `git init`: the nightly run then commits the vault once a day, so every change stays
-   undoable.
+   change below can be undone: `git add -A && git commit -m "Before NeoMyelin"`, and note whether
+   it already has a remote (`git remote -v`). Git itself is a question in step 2.
 6. Obsidian is where the user reads and edits the vault (no plugin is needed; the brain itself
    works on the plain Markdown files). A `.obsidian` folder in the vault means it is already an
    Obsidian vault. Otherwise check whether Obsidian is installed: `winget list --id
@@ -34,15 +33,47 @@ line what you are doing. Stop and report if a check fails; never guess past it.
    `https://obsidian.md/download` when that package manager is missing. Install only after the
    user says yes; if they decline, carry on, because every step below works without it.
 
-## 2. Ask the user four things
+## 2. Ask the user
 
-Ask in one message and wait for the answers:
+Ask all of these in one message and wait for the answers. Never skip the last two: they are the
+ones a user cannot set up later without knowing they exist.
 
 - Their name (how the assistant should call them).
 - The assistant's name (NeoMyelin has no built-in name; "Atlas", "Mira", anything).
 - The language the assistant should speak and write the vault in.
 - Claude Code users only: turn on the two-line status line (model, quota, context)? Recommended,
   because the `limit` quota view falls back on its reading.
+- Which of the harness CLIs missing in step 1.3 (Claude Code, Codex, Antigravity) to install now.
+  NeoMyelin hooks only into the ones installed before step 5; each needs its own account (Claude
+  Code a Claude Pro, Max, Team or Enterprise plan or a Console account; Codex a ChatGPT account;
+  Antigravity a Google account). Skip this question if all three are installed.
+- Back up the vault to a private GitHub repository? Recommended: the nightly run then commits and
+  pushes the vault once a day, so the notes survive a lost computer and every change can be
+  undone. If yes, ask for the address of an **empty private** repository (made at
+  `https://github.com/new` with no README, `.gitignore` or licence, so the first push is not
+  refused). If they would rather not, offer git without a remote (`git init`): daily commits on
+  this computer only. If the vault already has a remote (step 1.5), say so and skip the question.
+
+Then act on the answers before going on:
+
+1. Install each CLI the user chose, with its official installer (Windows PowerShell first, then
+   macOS and Linux):
+
+   - Claude Code: `irm https://claude.ai/install.ps1 | iex`, or
+     `curl -fsSL https://claude.ai/install.sh | bash`
+   - Codex: `irm https://chatgpt.com/codex/install.ps1 | iex`, or
+     `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
+   - Antigravity: `irm https://antigravity.google/cli/install.ps1 | iex`, or
+     `curl -fsSL https://antigravity.google/cli/install.sh | bash`
+
+   (From a shell other than PowerShell on Windows, wrap the command:
+   `powershell -ExecutionPolicy ByPass -c "<command>"`.) Then run `<cli> --version`. If this shell
+   does not find it, its folder is not on this shell's PATH yet: add the folder the installer
+   printed to PATH for this shell, because `install.py` skips the hooks of a CLI it cannot find.
+   Tell the user that each one signs in through the browser the first time it is opened.
+2. Git: if the user chose a backup, run `git init` (when the folder is not a repository yet) and
+   `git remote add origin <address>`; if they chose git without a remote, run `git init` only. The
+   first push happens in step 8, once the vault holds the install.
 
 ## 3. Download the release
 
@@ -78,7 +109,7 @@ vault's format keep working as they are.
    }
    ```
 
-   List only the harnesses found in step 1.3. `nightly_at` is when the daily evolution run becomes
+   List only the harnesses found in step 1.3 or installed in step 2. `nightly_at` is when the daily evolution run becomes
    due; it runs in the background at the first session after that time.
 2. From the unpacked release folder run, on Windows:
 
@@ -147,6 +178,14 @@ and record this install as the vault's first receipt: write
 `{"event_id": "<YYYY-MM-DD>-neomyelin-install", "summary": "[NeoMyelin] Installed (Model: <your model>)", "refs": ["AGENTS.md"]}`
 to a file and run `py -3 brain.py receipt --file <that file> --harness <claude, codex or agy>`
 (Windows; `python3` on macOS and Linux) in the vault; `daily/<today>.md` then shows it.
+
+If the vault is a git repository, commit this first state with the nightly run's own commit step:
+`py -3 .brain/scripts/daily_commit.py` (Windows; `python3` on macOS and Linux) in the vault. It
+leaves out runtime state and backups and, when there is a remote, pushes and links the branch to
+it, so the nightly push works from then on. Its last line must be `daily push complete` (or
+`daily push skipped: no remote` for git without a remote). If the push fails because git is not
+signed in to GitHub, help the user sign in (on Windows, Git Credential Manager opens a browser
+during the push; elsewhere `gh auth login` from GitHub CLI) and run it again.
 
 Last, if Obsidian is installed, tell them to open the vault in it: Open folder as vault, then pick
 this exact folder (not a folder above it, or Obsidian sees the vault as one of its subfolders).
