@@ -1,5 +1,10 @@
 # 🧠 NeoMyelin
 
+[![Release](https://img.shields.io/github/v/release/Estaed/neomyelin)](https://github.com/Estaed/neomyelin/releases/latest)
+![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
+![Claude Code | Codex | Antigravity](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Codex%20%7C%20Antigravity-555555)
+[![MIT licence](https://img.shields.io/github/license/Estaed/neomyelin)](LICENSE)
+
 **Your AI assistant remembers you between sessions, finds what you wrote, and changes only when
 your own behaviour shows it should.**
 
