@@ -54,6 +54,11 @@ session whose prompt contains `[no-record]` is not recorded.
 - Friction you hit yourself (a tool, step or instruction that failed or misled you) is recorded in
   the same turn; the nightly run turns repeats into candidates in `{companion}/Evolution.md`:
   `{python} "{vault}/.brain/scripts/gardener.py" record --category <c> --symptom <s> --evidence <e> --workaround <w> --proposal <p>`
-- A correction from {user} becomes a rule in `{companion}/Rules.md` in the same session.
+- A correction from {user} becomes a rule in `{companion}/Rules.md` in the same session. One
+  handled elsewhere (a hook, a skill, a task, or a rule that already covers it) gets the receipt
+  line `CORRECTION HANDLED: <event_id> -> <where>`, else the nightly doctor keeps flagging it. A
+  method {user} praised joins the skill or note that produced it. For a `[reaction debt]`
+  reminder, write the lesson down, then run
+  `{python} "{vault}/.brain/scripts/reactions.py" close <id> "<where>"`.
 - Anything else you file into the vault goes where the route table in `{vault}/AGENTS.md` says;
   read it first (it loads by itself only inside the vault).

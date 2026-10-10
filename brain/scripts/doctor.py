@@ -333,11 +333,22 @@ def _receipts(root: Path):
             continue
 
 
+HANDLED_RE = re.compile(r"\s*(?:[-*]\s+)?CORRECTION HANDLED:\s*(\S+)\s*(?:->|→)\s*\S")
+
+
 def check_corrections(root: Path, now: dt.datetime | None = None) -> tuple[str, str]:
     current = now or dt.datetime.now().astimezone()
     cutoff = current - dt.timedelta(days=14)
     recent = []
+    # Not every correction becomes a rule (a hook, a skill, a task, or a rule that already covers
+    # it): a receipt line `CORRECTION HANDLED: <event_id> -> <where>` closes it, else it warns for
+    # 14 days. The receipt's file name works in place of the event_id.
+    handled = set()
     for path, metadata, body in _receipts(root):
+        for line in body.splitlines():
+            match = HANDLED_RE.match(line)
+            if match:
+                handled.add(match.group(1).removesuffix(".md"))
         created = metadata.get("created_at")
         try:
             stamp = dt.datetime.fromisoformat(str(created).replace("Z", "+00:00"))
@@ -346,7 +357,8 @@ def check_corrections(root: Path, now: dt.datetime | None = None) -> tuple[str, 
         if stamp.tzinfo is None:
             stamp = stamp.astimezone()
         if cutoff <= stamp <= current and any(line.lstrip("-* ").startswith("CORRECTION:") for line in body.splitlines()):
-            recent.append((path.stem, stamp.astimezone().date()))
+            recent.append((path.stem, str(metadata.get("event_id", "")), stamp.astimezone().date()))
+    recent = [(item, day) for item, event_id, day in recent if not {item, event_id} & handled]
     if not recent:
         return OK, "no recent corrections in receipts"
     companion = config.companion_dir({"vault": str(root)})
@@ -448,7 +460,9 @@ def write_health(root: Path, checks: list[Check]) -> None:
     path = root / ".brain/.state/doctor.json"
     payload = {"ts": int(dt.datetime.now().timestamp()), "component": "doctor",
                "error": "; ".join(f"{c.name}: {c.detail}" for c in checks if c.status == ERROR),
-               "warnings": [f"{c.name}: {c.detail}" for c in checks if c.status == WARNING]}
+               "warnings": [f"{c.name}: {c.detail}" for c in checks if c.status == WARNING],
+               # The session start line has room for names, not details (memory_context).
+               "titles": [c.name for c in checks if c.status in (ERROR, WARNING)]}
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")

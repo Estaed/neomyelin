@@ -14,6 +14,7 @@ import config
 SCRIPT_DIR = Path(__file__).resolve().parent
 STEPS = (
     ('habits', ('habits.py',)),
+    ('reactions', ('reactions.py',)),
     ('evolution', ('patterns.py', 'run')),
     ('skill-candidates', ('gardener.py', 'candidates')),
     ('recall', ('recall.py', '--update')),

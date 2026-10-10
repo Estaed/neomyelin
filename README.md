@@ -53,8 +53,9 @@ the one trust step your client needs.
    receipt (secrets in it masked), keeps tasks with their history, and rebuilds a daily log.
 4. **Nightly:** repeated friction becomes a proposed fix in `Evolution.md`; a habit seen on three
    different days becomes a line in `Personality.md`; lessons a session forgot become knowledge
-   notes. It needs no scheduler: it starts in the background at your first session after the time
-   you chose.
+   notes; praise or an objection of yours that no skill, rule or note took in comes back at the
+   next session start. It needs no scheduler: it starts in the background at your first session
+   after the time you chose, and a missed night is caught up by the next session.
 
 <details>
 <summary>Everything it installs, feature by feature</summary>
@@ -65,7 +66,7 @@ the one trust step your client needs.
 | **Receipts, tasks and a daily log** | `brain.py`, a small engine at the vault root, records each finished piece of work as a receipt (secrets in it masked), keeps tasks with their revision history, and rebuilds a readable daily log from the receipts. Plain Markdown files you can open anywhere. |
 | **Recall on every prompt** | The notes that touch your question are attached before the assistant answers. Pure Python search out of the box; better matches automatically when [Ollama](https://ollama.com) with `bge-m3` is running. |
 | **A personality that is earned** | The assistant records what it notices about how you work. A line enters `Personality.md` only when the same thing shows on **three different days**, with the quotes as evidence. Any line can be vetoed and never comes back. |
-| **Friction becomes proposals** | When the assistant trips on the same thing twice, the nightly run writes a proposed fix into `Evolution.md` for you to accept or reject. Lessons a session forgot to file become knowledge notes. |
+| **Friction becomes proposals** | When the assistant trips on the same thing twice, the nightly run writes a proposed fix into `Evolution.md` for you to accept or reject. Lessons a session forgot to file become knowledge notes, and a reaction of yours that was never written down becomes a reminder. |
 | **A structure for your whole life** | `200-Goals`, `300-Education`, `400-Work`, `500-Projects`, `600-Life`, `700-Private`, `800-Arsenal`, `900-Archive`, and a map in `AGENTS.md` that tells the assistant where each kind of note goes. |
 | **House rules in every session** | A short set of rules in the vault (`.brain/instructions/`) tells the assistant when to write a receipt, recall, and record friction, plus four working principles. Your user-level `CLAUDE.md` imports it; Codex `AGENTS.md` and Antigravity's `GEMINI.md` get a copy. Your own lines in those files stay as they are. |
 | **One home for your skills** | Skills live in the vault's `.brain/skills/`: linked into Claude Code and Codex, and named in Antigravity's `skills.json`, so a skill edited once is the same in all three. The install can move the skills you already have into it: each is backed up first, and uninstalling puts it back. |

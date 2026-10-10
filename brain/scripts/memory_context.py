@@ -11,9 +11,10 @@ the new session:
     [Memory: Core]          <companion>/Core.md, whole
     [Memory: Personality]   <companion>/Personality.md, whole
     [Memory: Last Receipt]  newest receipt of this project (receipts/), clipped
-    [Memory: Reminders]     knowledge debt (the nightly knowledge audit), due tasks, due
-                            decisions, health (nightly job errors, the last doctor --save), the
-                            other open tasks of this project (tasks/); five lines. A session
+    [Memory: Reminders]     the brain's alarms first and never cut (health: nightly job errors and
+                            the last doctor --save; failed nightly steps; reaction debt; evolution;
+                            knowledge debt), then due tasks, due decisions and the other open
+                            tasks of this project (tasks/); five lines. A session
                             inside the vault keeps two of them for hygiene: a project folder under
                             `projects_root` with no card, a knowledge note missing from the index
 
@@ -421,13 +422,58 @@ def _health_lines(vault: Path, today: dt.date) -> list[str]:
     except (OSError, ValueError):
         doctor = {}
     if isinstance(doctor, dict):
-        if doctor.get('error'):
+        # The check names, not the first detail: a long detail filled the 160-character line and
+        # the other checks never showed. Older doctor.json files have no titles.
+        titles = doctor.get('titles')
+        if isinstance(titles, list) and titles:
+            lines.append(f"Health check: {', '.join(str(title) for title in titles)} "
+                         '(python .brain/scripts/doctor.py)')
+        elif doctor.get('error'):
             lines.append(f"Health check error: {doctor['error']}")
         elif doctor.get('warnings'):
             count = len(doctor['warnings'])
             lines.append(f"Health check: {count} warning(s), first: {doctor['warnings'][0]} "
                          '(python .brain/scripts/doctor.py)')
     return lines
+
+
+def _nightly_line(vault: Path) -> str:
+    """The steps that failed in the last nightly run (nightly.log), a run still going included. A
+    failed step that is not a model call (recall, the daily commit) reaches health.json nowhere else."""
+    try:
+        lines = (vault / '.brain' / '.state' / 'nightly.log').read_text(encoding='utf-8').splitlines()
+    except (OSError, UnicodeError):
+        return ''
+    failed: list[str] = []
+    for line in reversed(lines):
+        parts = line.split(' ', 2)
+        if len(parts) < 3:
+            continue
+        if parts[1] == '[START]':
+            break
+        if parts[1] == '[ERROR]':
+            failed.append(parts[2].split(':', 1)[0])
+    if not failed:
+        return ''
+    return (f"Nightly run: failed step(s) {', '.join(dict.fromkeys(reversed(failed)))} "
+            '(.brain/.state/nightly.log)')
+
+
+REACTION_STATE = '.brain/.state/reactions.json'
+
+
+def _reaction_debt_line(vault: Path) -> str:
+    """Praise or objections the nightly reaction audit (reactions.py) found written nowhere."""
+    try:
+        open_items = json.loads((vault / REACTION_STATE).read_text(encoding='utf-8-sig')).get('open', [])
+        if not isinstance(open_items, list) or not open_items:
+            return ''
+        first = str(open_items[0].get('quote') or '?') if isinstance(open_items[0], dict) else '?'
+    except (OSError, UnicodeError, ValueError, AttributeError):
+        return ''
+    short = first if len(first) <= 45 else first[:44].rstrip() + '…'
+    return (f'- [reaction debt] {len(open_items)} praise/objection(s) not written down ("{short}") — '
+            'python .brain/scripts/reactions.py list')
 
 
 DECISION_RE = re.compile(r'(?ms)^## Decision:[ \t]*(.+?)[ \t]*$(.*?)(?=^## |\Z)')
@@ -564,20 +610,24 @@ def _quiet(default, warnings: list[str] | None, function, *args):
 def _reminders(vault: Path, today: dt.date, label: str, vault_mode: bool,
                companion: Path | None = None, cards: list[tuple[Path, str]] | None = None,
                projects: Path | None = None, warnings: list[str] | None = None) -> str:
-    """Order: knowledge debt, due tasks, due decisions, health, evolution, unreadable tasks,
-    stale, the rest. Five lines at most; in a session inside the vault up to two hygiene lines
-    keep their place at the end."""
+    """Order: the brain's own alarms (health, failed nightly steps, reaction debt, evolution,
+    knowledge debt), due tasks, due decisions, unreadable tasks, stale, the rest. Five lines at
+    most, but the alarms are never cut: on the original brain, overdue tasks pushed the health
+    line out for four days and a broken check reached no one. In a session inside the vault up
+    to two hygiene lines keep their place at the end."""
     due, malformed, rest, stale = _quiet(([], [], [], ''), warnings, _task_lines, vault, today, label, vault_mode)
-    debt = _quiet('', warnings, _knowledge_debt_line, vault)
-    evolution = _quiet('', warnings, _evolution_line, companion)
-    lines = (([debt] if debt else []) + due + _quiet([], warnings, _decision_lines, companion, today)
-             + _quiet([], warnings, _health_lines, vault, today) + ([evolution] if evolution else [])
+    alarms = [line for line in (*_quiet([], warnings, _health_lines, vault, today),
+                                _quiet('', warnings, _nightly_line, vault),
+                                _quiet('', warnings, _reaction_debt_line, vault),
+                                _quiet('', warnings, _evolution_line, companion),
+                                _quiet('', warnings, _knowledge_debt_line, vault)) if line]
+    lines = (alarms + due + _quiet([], warnings, _decision_lines, companion, today)
              + malformed + ([stale] if stale else []) + rest)
     if vault_mode:
         hygiene = _quiet([], warnings, _hygiene_lines, vault, cards or [], projects)[:2]
-        lines = lines[:max(0, 5 - len(hygiene))] + hygiene
+        lines = lines[:max(len(alarms), 5 - len(hygiene))] + hygiene
     else:
-        lines = lines[:5]
+        lines = lines[:max(len(alarms), 5)]
     return '\n'.join(_line(line) for line in lines)
 
 
@@ -600,20 +650,33 @@ def _start_recall_warmup(warnings: list[str]) -> None:
 
 
 def _start_nightly(cfg: dict, warnings: list[str]) -> None:
-    """Detach today's due run; the child owns the work and completion stamp."""
+    """Detach the due run; the child owns the work and completion stamp.
+
+    Due means the last run is older than the latest `nightly_at`, so a night with no session
+    after that time is caught up by the next session, morning included (someone who works only
+    mornings never got a run). Before the first run ever, it waits for `nightly_at`.
+    """
     if os.environ.get(INVOKED_ENV):
         return
     now = local_now()
     hour, minute = map(int, cfg.get('nightly_at', '21:00').split(':'))
-    if now.time() < dt.time(hour, minute):
-        return
+    latest = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now < latest:
+        latest -= dt.timedelta(days=1)
     state = config.vault_path(cfg) / '.brain' / '.state'
     stamp = state / 'nightly.last-run'
     try:
-        if stamp.is_file() and dt.datetime.fromisoformat(stamp.read_text(encoding='utf-8').strip()).date() == now.date():
-            return
+        last = dt.datetime.fromisoformat(stamp.read_text(encoding='utf-8').strip())
     except (OSError, ValueError):
-        pass
+        last = None
+    if last is None:
+        if now.time() < dt.time(hour, minute):
+            return
+    else:
+        if last.tzinfo is None:
+            last = last.astimezone()
+        if last >= latest:
+            return
     if (state / 'nightly.lock').exists():
         return
     script = SCRIPT_DIR / 'nightly.py'
