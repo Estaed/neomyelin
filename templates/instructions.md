@@ -50,7 +50,9 @@ session whose prompt contains `[no-record]` is not recorded.
 - Open work becomes a task: `{python} "{vault}/brain.py" task-create --file <json>` with
   `{"source": "tasks/<id>.md", "text": "<context>", "metadata": {"id", "title", "status": "active", "owner": "{user}", "project", "next_action", "due_at" if dated}}`.
 - A durable lesson becomes a short note in `{vault}/knowledge/concepts/` plus its row in
-  `knowledge/index.md`.
+  `knowledge/index.md`. Its frontmatter carries one line `symptoms: ["...", "..."]`: 2-3 lines in
+  {user}'s own words for the moment it is needed (the symptom {user} sees, or a request that walks
+  into the trap), since recall matches the question to those, not to the title.
 - Friction you hit yourself (a tool, step or instruction that failed or misled you) is recorded in
   the same turn; the nightly run turns repeats into candidates in `{companion}/Evolution.md`:
   `{python} "{vault}/.brain/scripts/gardener.py" record --category <c> --symptom <s> --evidence <e> --workaround <w> --proposal <p>`

@@ -10,10 +10,10 @@
 | agy     | <home>/.gemini/config/hooks.json   | <vault>/.agents/hooks.json      |
 
 Hooks (HOOKS below): Claude and Codex get session context (SessionStart), per-prompt recall and
-the receipt bookkeeping (UserPromptSubmit), edit counting (PostToolUse), the git and heredoc
-gates (PreToolUse) and the receipt reminder (Stop). agy gets session context and the queued
-receipt reminder (PreInvocation) and idle-turn counting (Stop); it has no prompt-submit event
-this layer can use (docs/harnesses.md).
+the receipt bookkeeping (UserPromptSubmit), edit counting (PostToolUse), the git, session and
+heredoc gates (PreToolUse), and the receipt reminder and the receipt commit (Stop). agy gets
+session context and the queued receipt reminder (PreInvocation), idle-turn counting and the
+receipt commit (Stop); it has no prompt-submit event this layer can use (docs/harnesses.md).
 
 User scope makes memory load in every folder. Project scope is for a machine whose user-level
 hooks already belong to another brain; Claude's project file is settings.json (settings.local.json
@@ -83,8 +83,10 @@ def _claude_codex(harness: str, shell_matcher: str | None, bash_matcher: str | N
         _receipt(harness, 'UserPromptSubmit'),
         _receipt(harness, 'PostToolUse', matcher=EDIT_TOOLS),
         Hook('PreToolUse', 'scripts/git_gate.py', ('--pre-tool-use',), 10, shell_matcher, 'git'),
+        Hook('PreToolUse', 'scripts/session_gate.py', ('--pre-tool-use',), 10, None, 'session'),
         Hook('PreToolUse', 'scripts/heredoc_gate.py', ('--pre-tool-use',), 10, bash_matcher, 'heredoc'),
         _receipt(harness, 'Stop'),
+        Hook('Stop', 'scripts/receipt_commit.py', (), 10, name='commit'),
     )
 
 
@@ -96,6 +98,7 @@ HOOKS = {
     'agy': (
         Hook('PreInvocation', 'hooks/agy_hook.py', (), 15),
         _receipt('agy', 'Stop'),
+        Hook('Stop', 'scripts/receipt_commit.py', (), 10, name='commit'),
     ),
 }
 TARGETS = tuple(HOOKS)

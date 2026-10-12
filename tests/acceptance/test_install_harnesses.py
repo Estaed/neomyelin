@@ -94,6 +94,37 @@ class HarnessAcceptance(unittest.TestCase):
         pre = " ".join(h.get("command", "") for g in hooks["PreToolUse"] for h in g.get("hooks", []))
         self.assertIn("git_gate", pre)
         self.assertIn("heredoc_gate", pre)
+        # Task-20: the session gate sees every tool call (no matcher); Task-19: receipts commit at Stop.
+        session = [g for g in hooks["PreToolUse"]
+                   if any("session_gate.py" in h.get("command", "")
+                          and h.get("command", "").endswith("--pre-tool-use") for h in g.get("hooks", []))]
+        self.assertEqual(len(session), 1, hooks["PreToolUse"])
+        self.assertNotIn("matcher", session[0])
+        stop = " ".join(h.get("command", "") for g in hooks["Stop"] for h in g.get("hooks", []))
+        self.assertIn("receipt_commit.py", stop)
+        self.assertIn("receipt_gate.py", stop)
+
+    def test_1c_codex_and_agy_commit_receipts_at_stop(self):
+        # Task-19/20: the shimmed harnesses get the receipt commit at Stop (and Codex the session
+        # gate), each through its own shim.
+        self.need("codex")
+        self.need("agy")
+        home = self.base / "home-commit"
+        res = self.install(home)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+        def shim_text(command: str) -> str:
+            name = command.replace("\\", "/").strip().strip('"').rsplit("/", 1)[-1]
+            return (self.vault / ".brain" / "hooks" / name).read_text(encoding="utf-8")
+
+        codex = json.loads((home / ".codex" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        codex_stop = [shim_text(h["command"]) for g in codex["Stop"] for h in g["hooks"]]
+        self.assertTrue(any("receipt_commit.py" in t for t in codex_stop), codex_stop)
+        codex_pre = [shim_text(h["command"]) for g in codex["PreToolUse"] for h in g["hooks"]]
+        self.assertTrue(any("session_gate.py" in t for t in codex_pre), codex_pre)
+        agy = json.loads((home / ".gemini" / "config" / "hooks.json").read_text(encoding="utf-8"))
+        agy_stop = [shim_text(c) for c in agy_commands({"k": {"Stop": agy["neomyelin"].get("Stop", [])}}, "k")]
+        self.assertTrue(any("receipt_commit.py" in t for t in agy_stop), agy_stop)
 
     def test_2_foreign_brain_folder_refused_untouched(self):
         vault = self.base / "vault-foreign"

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Read-only health report for a NeoMyelin vault."""
+"""Read-only health report for a NeoMyelin vault (one exception: check_symptom_lines records its
+baseline once)."""
 from __future__ import annotations
 
 import argparse
@@ -409,6 +410,111 @@ def check_retired_references(root: Path) -> tuple[str, str]:
     return (WARNING, "possibly missing script references: " + ", ".join(sorted(set(missing))[:5])) if missing else (OK, "no missing script references found")
 
 
+PATTERN_RUN = re.compile(r"\bPatterns: (\d+) added, (\d+) evidence updates\b|\bPattern evolution failed\b")
+EMPTY_RUNS = 7
+
+
+def check_patterns(root: Path, now: dt.datetime | None = None) -> tuple[str, str]:
+    """Warn when the nightly pattern runs keep producing nothing while observations wait.
+
+    Where this was ported from, the run wrote "0 added, 0 evidence updates" every night for two
+    weeks without an error. A run is a model run in patterns.log: `Patterns: N added, M evidence
+    updates, ...` or `Pattern evolution failed` (a failed run produced nothing too); a `waiting`
+    line (fewer than three days observed) is not a run. Waiting observations are those after the
+    last scan; with no log at all, only those from a finished day count, because tonight's run
+    has not had the chance to read today's."""
+    import evidence
+    import patterns
+    state = root / ".brain" / ".state"
+    ledger = root / ".brain" / "patterns.md"
+    text = ledger.read_text(encoding="utf-8-sig") if ledger.is_file() else ""
+    waiting = evidence.all_sources(root, after=patterns.last_scan(text))
+    log = state / patterns.LOG
+    if not log.is_file():
+        today = (now or dt.datetime.now().astimezone()).date().isoformat()
+        overdue = [item for item in waiting if item["day"] < today]
+        if overdue:
+            return WARNING, (f"no pattern run is logged while {len(overdue)} observation(s) from "
+                             "finished days wait; .brain/.state/nightly.log shows the nightly steps")
+        return OK, "no pattern run yet; no observation from a finished day waits"
+    runs = []
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        found = PATTERN_RUN.search(line)
+        if found:
+            added, updates = found.groups()
+            runs.append(added is not None and int(added) + int(updates) > 0)
+    last = runs[-EMPTY_RUNS:]
+    if len(last) == EMPTY_RUNS and not any(last) and waiting:
+        return WARNING, (f"the last {EMPTY_RUNS} pattern runs produced nothing while {len(waiting)} "
+                         f"observation(s) wait; the model's last reply: .brain/.state/{patterns.LAST_REPLY}")
+    if not last:
+        return OK, "no pattern run with a model call yet"
+    return OK, f"{sum(last)} of the last {len(last)} pattern runs added a pattern or evidence"
+
+
+def check_symptom_lines(root: Path, now: dt.datetime | None = None) -> tuple[str, str]:
+    """Warn when a knowledge note was written without a `symptoms:` line recall can read.
+
+    Recall matches a question to those lines (the user's own words for when the note is needed),
+    not to the note's title; where this was ported from, they took the prompt hook from 26 to 29 of
+    30 target notes. The instructions ask every note writer for the line, and this check keeps it
+    from relying on memory. It reads the line with recall's own parser, so a line recall would
+    ignore (a YAML block list, an unquoted item) counts as missing.
+
+    Notes older than this release are never flagged: it cannot write their lines. Older means
+    present when the release first ran in this vault, recorded once in recall.SYMPTOMS_BASELINE
+    (on a fresh vault, none) by the first recall index build, which an update's first session
+    start or nightly run makes before any note is written, or by this check if it runs first; the
+    one file this report writes without --save."""
+    import recall
+    notes = sorted((root / "knowledge" / "concepts").glob("*.md"))
+    baseline = recall.SYMPTOMS_BASELINE.as_posix()
+    try:
+        recall.record_symptoms_baseline(root, (now or dt.datetime.now().astimezone()).date().isoformat())
+    except OSError as exc:
+        return WARNING, f"cannot record {baseline} ({_one_line(exc, 80)}); no note was checked"
+    try:
+        data = json.loads((root / baseline).read_text(encoding="utf-8"))
+        older = data["notes"]
+        if not isinstance(older, list) or not all(isinstance(name, str) for name in older):
+            raise ValueError("notes is not a list of file names")
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+        return WARNING, (f"{baseline} is unreadable ({_one_line(exc, 80)}); delete it and run "
+                         "doctor.py again (every knowledge note there then counts as older)")
+    since = str(data.get("recorded_at") or "the first check")
+    skipped = set(older)
+    checked, missing = 0, []
+    for path in notes:
+        if path.name in skipped:
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError):
+            continue  # recall reports a note it cannot read
+        checked += 1
+        if not recall.symptom_lines(raw):
+            missing.append(path.name)
+    older_count = sum(1 for path in notes if path.name in skipped)
+    if missing:
+        # _safe cuts a detail at 240 characters, so the head stays short and three names fit whole
+        # when they can (the knowledge audit's own names, at most 60 characters, always do);
+        # longer ones are each cut to an equal share so that all three still show. The fix follows
+        # when the names leave room for it whole; the names come first.
+        head = f"{len(missing)} knowledge note(s) lack a `symptoms: [...]` line: "
+        more = " ..." if len(missing) > 3 else ""
+        names = missing[:3]
+        room = 240 - len(head) - len(more) - 2 * (len(names) - 1)
+        if sum(len(name) for name in names) > room:
+            names = [_one_line(name, room // len(names)) for name in names]
+        detail = head + ", ".join(names) + more
+        fix = "; add 2-3 'when needed' lines in the user's own words"
+        return WARNING, detail + fix if len(detail) + len(fix) <= 240 else detail
+    if not checked:
+        return OK, f"no knowledge note written since {since} to check ({older_count} older not checked)"
+    return OK, (f"all {checked} knowledge note(s) written since {since} have a symptoms line "
+                f"({older_count} older not checked)")
+
+
 def _safe(name: str, function: Callable[[], tuple[str, str]]) -> Check:
     try:
         status, detail = function()
@@ -447,6 +553,8 @@ def run_checks(root: Path, now: dt.datetime | None = None, home: Path | None = N
         _safe("Corrections", lambda: check_corrections(root, now)),
         _safe("Pending decisions", lambda: check_pending_decisions(root)),
         _safe("Retired references", lambda: check_retired_references(root)),
+        _safe("Pattern evolution", lambda: check_patterns(root, now)),
+        _safe("Symptom lines", lambda: check_symptom_lines(root, now)),
     ]
 
 

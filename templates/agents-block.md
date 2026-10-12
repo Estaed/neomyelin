@@ -6,7 +6,7 @@ instructions stay in English.
 
 | Kind of note | Where |
 | --- | --- |
-| Open work, a reminder, "ask me in a week" | `tasks/`, one small file per open item (title, status `active`/`waiting`/`done`/`cancelled`, `due_at`, next step). Create: `{python} brain.py task-create --file <json>`. Update its metadata: `{python} .brain/scripts/task_update.py <id> status=done next_action="..."`. The task is the one place its status, due date and next step live |
+| Open work, a reminder, "ask me in a week" | `tasks/`, one small file per open item (title, status `active`/`waiting`/`done`/`cancelled`, `due_at`, next step). Create: `{python} brain.py task-create --file <json>`. Update its metadata: `{python} .brain/scripts/task_update.py <id> status=done next_action="..."`; it stops on a task file with uncommitted changes, since another live session may own it: ask that session first, and add `--mine` when the changes are this session's own. The task is the one place its status, due date and next step live |
 | A finished, meaningful piece of work | a receipt in `receipts/`: `{python} brain.py receipt --file <json> --harness <claude/codex/agy>` (the format is in the user-level instructions) |
 | The map of goals: school, work, other aims (what, who, where) | `{200}/` |
 | School, courses, thesis | `{300}/` |
@@ -15,7 +15,7 @@ instructions stay in English.
 | Health, hobbies, personal life | `{600}/` |
 | Official papers, anything sensitive | `{700}/` (recall never indexes it) |
 | Tools, methods, how-tos | `{800}/` |
-| Durable knowledge | `knowledge/concepts/`: a short note with its source, plus its row in `knowledge/index.md` |
+| Durable knowledge | `knowledge/concepts/`: a short note with its source and, in its frontmatter, one line `symptoms: ["...", "..."]`: 2-3 lines in the user's own words for the moment it is needed (the symptom they see, or a request that walks into the trap), since recall matches the question to those, not to the title; plus its row in `knowledge/index.md` |
 | A decision that is costly to reverse | `{companion}/Decisions.md`: expectation and check date |
 | Repeated friction | `{python} .brain/scripts/gardener.py record --category <c> --symptom <s> --evidence <e> --workaround <w> --proposal <p>`; the nightly run turns repeats into candidates in `{companion}/Evolution.md` |
 | A retired version, old logs | `{900}/` (recall never indexes it). Finished work is not moved there; its task is closed |

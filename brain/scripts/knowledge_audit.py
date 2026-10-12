@@ -16,6 +16,10 @@ import stage
 
 WINDOW = dt.timedelta(hours=48)
 HEADINGS = ('**Learning**',)
+# A new note's `symptoms:` line (recall indexes it as its own chunk): one line each, at most this
+# long, at most this many.
+SYMPTOM_CHARS = 120
+SYMPTOM_LINES = 3
 
 
 def _paths(cfg: dict) -> tuple[Path, Path, Path]:
@@ -152,11 +156,15 @@ actual meaning. A cited concept is a hint, not proof. Classify as a gap only if 
 source-backed lesson is absent. A direct contradiction is a conflict, not a gap.
 One-time machine state and unsupported claims are neither. Ideas for improving this assistant's
 rules or workflow go to Evolution.md as ideas, never knowledge notes.
-Write proposed note titles and bodies in {language}.
+Write proposed note titles, bodies and symptoms in {language}. A gap's symptoms are 2-3 lines in
+the user's own casual words for the moment the note is needed: the symptom they see or a request
+that walks into the trap, never the solution's name (search matches a question to these lines,
+not to the title).
 Return ONLY a JSON object with this schema:
 {{"reviewed_ids":["every exact input id, including covered items"],
 "gaps":[{{"id":"exact id","reason":"10-400 chars","target":"new or knowledge/concepts/existing.md",
-"title":"short title","note":"concise source-backed note"}}],
+"title":"short title","note":"concise source-backed note",
+"symptoms":["2-3 lines, one line each, at most {SYMPTOM_CHARS} chars"]}}],
 "conflicts":[{{"id":"exact id","reason":"10-400 chars",
 "target":"knowledge/concepts/existing.md"}}],
 "ideas":[{{"id":"exact id","reason":"10-400 chars","proposal":"specific assistant improvement"}}]}}
@@ -206,10 +214,29 @@ def _checked_output(raw: str, items: list[dict], vault: Path) -> tuple[list[dict
                 proposal = row.get('proposal')
                 if not isinstance(proposal, str) or not proposal.strip() or len(proposal) > 800:
                     raise ValueError('invalid evolution idea')
-            checked.append({**by_id[row['id']], **row})
+            entry = {**by_id[row['id']], **row}
+            if key == 'gaps':
+                entry['symptoms'] = _symptoms(row.get('symptoms'))
+            checked.append(entry)
             seen.add(row['id'])
         output.append(checked)
     return tuple(output)
+
+
+def _symptoms(value: object) -> list[str]:
+    """The usable symptom lines of a model reply: strings that hold one line, cut to
+    SYMPTOM_CHARS, at most SYMPTOM_LINES. They are optional, so a missing or malformed list only
+    costs the note its `symptoms:` line, never the note."""
+    if not isinstance(value, list):
+        return []
+    lines = []
+    for item in value:
+        text = item.strip() if isinstance(item, str) else ''
+        # splitlines, not '\n': recall reads frontmatter with splitlines, which also breaks at
+        # \r, \x85 or U+2028, and a broken line would make recall drop the whole list.
+        if text and len(text.splitlines()) == 1:
+            lines.append(text[:SYMPTOM_CHARS].rstrip())
+    return lines[:SYMPTOM_LINES]
 
 
 def _slug(value: str) -> str:
@@ -237,8 +264,10 @@ def _write_gap(vault: Path, gap: dict, today: dt.date) -> str:
         if target.exists() and not already_written:
             raise FileExistsError(f'knowledge note name collision: {target}')
         if not already_written:
+            symptoms = _symptoms(gap.get('symptoms'))
             content = ('---\n' + f'title: {json.dumps(title, ensure_ascii=False)}\n'
-                       f'created: {today.isoformat()}\nupdated: {today.isoformat()}\n'
+                       + (f'symptoms: {json.dumps(symptoms, ensure_ascii=False)}\n' if symptoms else '')
+                       + f'created: {today.isoformat()}\nupdated: {today.isoformat()}\n'
                        'type: concept\nstatus: active\ntags: [knowledge]\n'
                        f'sources: [{json.dumps(source, ensure_ascii=False)}]\n---\n\n'
                        f"# {title}\n\n{gap['note'].strip()}\n\nSource: {source}\n\n{marker}\n")

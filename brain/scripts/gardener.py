@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Record friction and propose fixes after recurrence on distinct days."""
+"""Record friction and propose fixes after recurrence on distinct days; close as reject a
+proposal still pending 30 days after its last activity."""
 from __future__ import annotations
 
 import argparse
@@ -25,6 +26,16 @@ DECISION = re.compile(r'^- Decision:\s*(\S+)', re.MULTILINE)
 DECISION_DATE = re.compile(r'^- Decision note:\s*(\d{4}-\d{2}-\d{2})\b', re.MULTILINE)
 FAILED = re.compile(r'^- Failed: .* \(gardener\)\s*$')
 SKILL_MARKER = re.compile(r'\(skill-gardener:\s*([0-9a-f]{12}),')
+# A proposal still pending this many days after its last activity is closed as reject.
+STALE_DAYS = 30
+PROPOSAL = re.compile(r'^### (Candidate|Idea)\s+\S')
+PENDING = re.compile(r'^- Decision:\s*pending\b', re.MULTILINE | re.IGNORECASE)
+# The keys a closing rewrites, matched in any case like PENDING, so a block found pending is closed.
+CLOSING_KEY = re.compile(r'- (Decision note|Decision|Type):', re.IGNORECASE)
+MARKER_DATE = re.compile(r'\(skill-gardener:\s*[0-9a-f]{12},\s*\d+ cases?,\s*(\d{4}-\d{2}-\d{2})')
+IDEA_SOURCE = re.compile(r'^- Source:\s*receipts/[^\s/\\]+\.md\s*$', re.MULTILINE)
+# A knowledge-audit idea has no date of its own; this records the day the gardener first saw it pending.
+IDEAS_SEEN = Path('.brain') / '.state' / 'evolution-ideas.json'
 
 
 def _paths(cfg: dict) -> tuple[Path, Path]:
@@ -289,6 +300,113 @@ def _candidate(fp: str, group: list[dict[str, Any]]) -> str:
             f"  *(skill-gardener: {fp}, {len(group)} cases, {str(ordered[-1].get('created_at', ''))})*\n")
 
 
+def _day(stamp: object) -> dt.date | None:
+    try:
+        return dt.date.fromisoformat(stamp) if isinstance(stamp, str) else None
+    except ValueError:
+        return None
+
+
+def _close_stale(text: str, today: dt.date,
+                 seen: dict[str, str] | None = None) -> tuple[str, list[str], list[str]]:
+    """Close each proposal still pending STALE_DAYS days after its last activity as reject.
+
+    Pending proposals piled up until the session-start line about them meant nothing. A
+    candidate's last activity is the date in its gardener marker (its newest case when it was
+    written). A knowledge-audit idea (an `### Idea` with a `- Source: receipts/...` line) has no
+    date, and its receipt can be weeks older than the idea when the audit carried the item, so its
+    last activity is the day the gardener first saw it pending. `seen` maps each such idea to that
+    day and is rebuilt in place to hold the ideas still pending: a new one, or one whose recorded
+    day is unreadable, gets today; a closed or decided one is dropped. Without `seen` an idea has
+    no date. The block stays (a deleted candidate comes back); its Decision and Type become reject
+    and its decision note says why and since when. The note replaces only the template
+    placeholder; a note the user wrote is kept and the gardener's follows it. Returns the new
+    text, the closed proposals, and the pending ones with no readable date, which are left alone.
+    Each line keeps its own line ending.
+    """
+    lines = text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if PROPOSAL.match(line)]
+    closed: list[str] = []
+    undated: list[str] = []
+    pending_ideas: dict[str, str] = {}
+    for start in reversed(starts):
+        end = next((index for index in range(start + 1, len(lines))
+                    if re.match(r'^#{1,3}\s', lines[index])), len(lines))
+        block = ''.join(lines[start:end])
+        if not PENDING.search(block):
+            continue
+        name = lines[start].strip().removeprefix('### ')
+        marker = MARKER_DATE.search(block)
+        if marker:
+            since = _day(marker.group(1))
+        elif seen is not None and block.startswith('### Idea') and IDEA_SOURCE.search(block):
+            since = _day(seen.get(name)) or today
+            pending_ideas[name] = since.isoformat()
+        else:
+            since = None
+        if since is None:
+            undated.append(name)
+            continue
+        if (today - since).days < STALE_DAYS:
+            continue
+        pending_ideas.pop(name, None)
+        note = (f'- Decision note: {today.isoformat()} - no decision within {STALE_DAYS} days of its '
+                f'last activity on {since.isoformat()}; closed as reject by the gardener')
+        anchor = noted = None
+        for index in range(start + 1, end):
+            line = lines[index]
+            ending = line[len(line.rstrip('\r\n')):]
+            key = CLOSING_KEY.match(line)
+            field = key.group(1).lower() if key else ''
+            if field == 'decision':
+                lines[index] = '- Decision: reject' + ending
+                anchor = index if anchor is None else anchor
+            elif field == 'type':
+                lines[index] = '- Type: reject' + ending
+                anchor = index
+            elif field == 'decision note':
+                written = line[key.end():].strip()
+                if not written or written.startswith('TODO'):
+                    lines[index] = note + ending
+                    noted = index
+                else:
+                    anchor = index  # the user's own text: keep it, put the note after it
+        if noted is None and anchor is not None:
+            newline = '\r\n' if '\r\n' in block else '\n'
+            if not lines[anchor].endswith('\n'):
+                lines[anchor] += newline
+                lines.insert(anchor + 1, note)
+            else:
+                lines.insert(anchor + 1, note + newline)
+        closed.append(name)
+    if seen is not None:
+        seen.clear()
+        seen.update(pending_ideas)
+    return ''.join(lines), closed[::-1], undated[::-1]
+
+
+def _read_ideas_seen(path: Path) -> dict[str, str]:
+    """The ideas' first-seen days; a missing or broken record restarts every idea's clock today."""
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, ValueError):
+        return {}
+    return {str(key): str(value) for key, value in data.items()} if isinstance(data, dict) else {}
+
+
+def _write_ideas_seen(path: Path | None, before: dict[str, str], after: dict[str, str] | None) -> None:
+    if path is not None and after is not None and after != before:
+        stage.atomic_write(path, json.dumps(after, ensure_ascii=False, indent=2, sort_keys=True) + '\n')
+
+
+def _vault_evolution(evolution: Path, cfg: dict) -> bool:
+    """Whether `evolution` is the vault's own Evolution file, the only one the first-seen record covers."""
+    try:
+        return evolution.resolve() == _paths(cfg)[1].resolve()
+    except (config.ConfigError, OSError):
+        return False
+
+
 def cmd_candidates(args: argparse.Namespace, cfg: dict) -> int:
     evolution = _evolution_path(args, cfg)
     if not evolution.is_file():
@@ -304,8 +422,24 @@ def cmd_candidates(args: argparse.Namespace, cfg: dict) -> int:
                  if _day_count(group) >= args.threshold
                  and not ({row.get('fingerprint') for row in group} & existing)]
     updated, failures = _update_failures(text, _decisions(text, groups))
-    if not additions and not failures:
+    # The record belongs to the vault's Evolution file: another file (`--evolution`) would rebuild it
+    # from its own ideas and restart the vault ideas' clocks, so that file's ideas stay undated.
+    seen_path = config.vault_path(cfg) / IDEAS_SEEN if _vault_evolution(evolution, cfg) else None
+    recorded = _read_ideas_seen(seen_path) if seen_path is not None else {}
+    seen = dict(recorded) if seen_path is not None else None
+    updated, closed, undated = _close_stale(updated, dt.date.today(), seen)
+    if undated:
+        print(f'{len(undated)} pending proposal(s) have no readable date and stay open: '
+              + ', '.join(undated))
+    if closed:
+        action = ('would be closed as reject (dry run, nothing closed)' if args.dry_run
+                  else 'closed as reject')
+        print(f'{len(closed)} proposal(s) with no decision within {STALE_DAYS} days of their last '
+              f'activity {action}: ' + ', '.join(closed))
+    if not additions and not failures and not closed:
         print('no new evolution candidates or correction results')
+        if not args.dry_run:
+            _write_ideas_seen(seen_path, recorded, seen)
         return 0
     for item in additions:
         print(item)
@@ -319,6 +453,8 @@ def cmd_candidates(args: argparse.Namespace, cfg: dict) -> int:
         updated += ('' if updated.endswith('\n') else newline) + newline
         updated += newline.join(item.replace('\n', newline) for item in additions)
     stage.atomic_write(evolution, updated)
+    # After Evolution.md: if that write fails, the closed ideas stay recorded and close next night.
+    _write_ideas_seen(seen_path, recorded, seen)
     print(f'updated: {evolution}')
     return 0
 

@@ -10,6 +10,13 @@ Two engines behind one interface:
 `NEOMYELIN_RECALL=bm25|ollama` forces one. Unset, ollama is used when it is ready, else bm25;
 if ollama fails mid-query the answer comes from bm25 with a note on stderr.
 
+What it searches: the vault's notes, receipts and open tasks (the scope comment below), never a
+dot folder, with one exception: each skill's SKILL.md in the vault's skills hub
+(`.brain/skills/<name>/SKILL.md`; not its references/ or anything else in `.brain/`), so a
+question about a skill finds what the skill says. A note's `symptoms: ["...", "..."]` frontmatter
+line (when the note is needed, in the user's own words) is searched as one more chunk of it, so a
+question asked with the symptom finds a note titled after the fix.
+
 WHY BOTH (measured on a 120-note vault, 20 queries, blind run):
 
     BM25 (index + grep)                   recall@5 0.90   hit@1 0.70
@@ -59,6 +66,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import config  # noqa: E402
+import skills_hub  # noqa: E402  (where the hub is and what counts as a skill in it)
 
 STATE_DIR = SCRIPT_DIR / '.state'
 ENGINES = ('bm25', 'ollama')
@@ -106,6 +114,10 @@ PREFIX = 5
 #     indexed knowledge/concepts/ only).
 #   - harness instructions at the root, dot folders (.brain, .claude, .git, .obsidian), closed
 #     tasks and files marked `"generated": true`.
+# The one exception to the dot folders: each skill's SKILL.md in the skills hub
+# (`.brain/skills/<name>/SKILL.md`, skills_hub.hub_skills), and nothing else of the skill: its
+# references/ stay out, as in the original. Without it the original described a skill from memory
+# and proposed a mode its SKILL.md already had.
 INSTRUCTION_FILES = {'agents.md', 'claude.md', 'gemini.md'}
 SKIP_DIRS = {'node_modules', '__pycache__'}
 ROOT_SKIP_DIRS = {'daily'}
@@ -113,6 +125,10 @@ SKIP_KEYS = {'knowledge/index.md', 'knowledge/log.md'}
 ARCHIVE = config.ARCHIVE
 PRIVATE = config.PRIVATE
 CLOSED_TASK = {'done', 'cancelled'}
+# A note's frontmatter `symptoms: ["...", "..."]` (same rules as `aliases`): when it is needed, in
+# the user's own words. Indexed as one extra chunk of the note (build).
+SYMPTOMS = 'symptoms'
+SYMPTOM_CHUNK = 'When needed: '
 # A note about a retired mechanism says so in its first 20 lines; its preview says so too.
 HISTORICAL = {'status: historical'}
 HISTORY_LINE = ('> History',)
@@ -167,7 +183,8 @@ def _skip_dir(name: str, at_root: bool) -> bool:
 
 def documents(vault: Path) -> dict[str, Path]:
     """Every note recall covers, by vault-relative key (scope above). Open tasks only: a closed
-    task's result lives in its receipt, and indexed it would come back as open work."""
+    task's result lives in its receipt, and indexed it would come back as open work. Dot folders
+    are skipped except for each skill's SKILL.md in the hub (`.brain/skills/<name>/SKILL.md`)."""
     docs: dict[str, Path] = {}
     for root, dirs, files in os.walk(vault):
         at_root = Path(root) == vault
@@ -184,6 +201,13 @@ def documents(vault: Path) -> dict[str, Path]:
             if key.startswith('tasks/') and _task_closed(path):
                 continue
             docs[key] = path
+    try:
+        skills = skills_hub.hub_skills(vault)
+    except OSError:
+        skills = []  # an unreadable hub is skipped like any unreadable folder above (os.walk)
+    for name in skills:
+        path = skills_hub.hub(vault) / name / 'SKILL.md'
+        docs[path.relative_to(vault).as_posix()] = path
     return docs
 
 
@@ -206,10 +230,11 @@ def _body(key: str, raw: str) -> str:
     return body
 
 
-def _aliases(raw: str) -> list[str]:
-    """Frontmatter `aliases: ["a", "b"]`, a one-line JSON-style list only."""
+def _aliases(raw: str, field: str = 'aliases') -> list[str]:
+    """Frontmatter `aliases: ["a", "b"]` (or another `field`, such as SYMPTOMS), a one-line
+    JSON-style list only."""
     for line in raw.splitlines()[:20]:
-        if line.startswith('aliases:'):
+        if line.startswith(f'{field}:'):
             value = line.split(':', 1)[1].strip()
             if value.startswith('[') and value.endswith(']'):
                 try:
@@ -219,6 +244,34 @@ def _aliases(raw: str) -> list[str]:
                 return [str(a).strip() for a in items if str(a).strip()][:8]
             return []
     return []
+
+
+def symptom_lines(raw: str) -> list[str]:
+    """The note's `symptoms:` lines as recall reads them (doctor.py flags a note without any)."""
+    return _aliases(raw, SYMPTOMS)
+
+
+# doctor.py flags a knowledge note written without a `symptoms:` line, but not one that was there
+# before this release first ran in the vault: a release cannot write those lines. Their names are
+# recorded here once, by the first index build (session start, the prompt hook's refresh, and the
+# nightly run before its knowledge audit, so before any note a session or the audit writes after
+# an update) or by doctor.py if it runs first (a fresh install's check).
+SYMPTOMS_BASELINE = Path('.brain') / '.state' / 'symptoms-baseline.json'
+
+
+def record_symptoms_baseline(vault: Path, today: str | None = None) -> bool:
+    """Write SYMPTOMS_BASELINE when the vault has none: the knowledge notes there now (on a fresh
+    vault, none) and today's date. True when it wrote; raises OSError when it cannot."""
+    path = vault / SYMPTOMS_BASELINE
+    if path.exists():
+        return False
+    notes = [note.name for note in sorted((vault / 'knowledge' / 'concepts').glob('*.md'))]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f'.{os.getpid()}.tmp')
+    temporary.write_text(json.dumps({'recorded_at': today or time.strftime('%Y-%m-%d'), 'notes': notes},
+                                    ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
+    os.replace(temporary, path)
+    return True
 
 
 def _label(key: str, raw: str) -> str:
@@ -431,6 +484,10 @@ def build(engine: str, full: bool = False, log=lambda line: None) -> dict:
     moves mtime without a change and would re-embed the whole vault for nothing. `log` gets a
     progress line every 20 notes (a first embedding run can take minutes)."""
     vault = _vault()
+    try:
+        record_symptoms_baseline(vault)
+    except OSError:
+        pass  # doctor.py records it when it runs, and reports why it cannot
     index = {'engine': _engine_id(engine), 'docs': {}} if full else _load_index(engine)
     stored = index['docs']
     docs = documents(vault)
@@ -468,6 +525,16 @@ def build(engine: str, full: bool = False, log=lambda line: None) -> dict:
             pieces, clipped = _split(body)
             if clipped:
                 truncated.append(key)
+            # Notes are titled after the fix, while the question comes with the symptom ("why does
+            # the grain not show on the other screen" vs "CSS variable url() resolves against the
+            # stylesheet"); in the original's blind sets most misses were that. The `symptoms:`
+            # line, in the user's own words for the moment the note is needed, is its own chunk:
+            # it does not dilute the content chunks, and a note scores by its best chunk anyway.
+            # Measured in the original: the prompt hook showed the target 26 -> 29 of 30 on the
+            # first prompt, 24 -> 28 later, hit@1 20 -> 24, noise unchanged.
+            symptoms = symptom_lines(raw)
+            if symptoms:
+                pieces = pieces + [SYMPTOM_CHUNK + ' / '.join(symptoms)]
             label = _label(key, raw)
             # Every chunk carries the document identity ("contextual chunking"): a chunk from
             # the middle of a long note does not say what it belongs to, and without the prefix

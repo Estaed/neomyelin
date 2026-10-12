@@ -16,7 +16,10 @@ so on each run, so no made-up name is ever injected into a session as fact.
    engine (engine/brain.py: receipts, tasks, the daily view) to <vault>/brain.py, only files whose
    bytes differ. In a skill's SKILL.md, `{script:<name>.py}` becomes the command that runs
    <vault>/.brain/scripts/<name>.py by absolute path with the platform's launcher, so the skill
-   runs from any working folder.
+   runs from any working folder. The release's version (the VERSION file release.py puts in the
+   ZIP) goes to <vault>/.brain/VERSION, which the update notice (updates.py) compares with the
+   latest release; a copy without a valid VERSION (a dev checkout) records none and removes an
+   older record, so its vault never hears of updates.
 4. Lays out the vault (`plan_layout`): config.FOLDERS, each with its note from templates/folders/;
    the companion files (COMPANION_FILES) in the companion folder and .brain/patterns.md, each
    only when absent, never overwritten; our block (the route table) between NeoMyelin's markers
@@ -71,6 +74,7 @@ import config  # noqa: E402
 import render_hooks  # noqa: E402
 import render_instructions  # noqa: E402
 import skills_hub  # noqa: E402
+import updates  # noqa: E402
 
 # A first install without --config: wording that asserts nothing about who anyone is.
 NEUTRAL = {'user_name': 'the user', 'assistant_name': 'the assistant', 'language': "the user's language"}
@@ -142,6 +146,32 @@ def _config(vault: Path, given: Path | None) -> dict:
                          f'("{cfg["user_name"]}", "{cfg["assistant_name"]}"); put your own names in it '
                          'and pass it with --config. Nothing was written.')
     return cfg
+
+
+def release_version() -> tuple[str | None, str]:
+    """(version, why none): the x.y.z in this copy's VERSION file, which release.py writes into the
+    release ZIP. A dev checkout has none."""
+    try:
+        text = (ROOT / 'VERSION').read_text(encoding='utf-8-sig').strip()
+    except FileNotFoundError:
+        return None, 'this copy has no VERSION file'
+    except (OSError, UnicodeError) as exc:
+        return None, f'VERSION unreadable: {exc}'
+    if updates.parse_version(text) is None:
+        return None, f'VERSION does not hold x.y.z: {text[:40]!r}'
+    return text, ''
+
+
+def _record_version(vault: Path, version: str | None, why: str) -> str:
+    record = updates.version_path(vault)
+    if version is not None:
+        changed = _write_if_changed(record, f'{version}\n'.encode('utf-8'))
+        return f"  version: {version} {'recorded' if changed else 'unchanged'} in .brain/{record.name}"
+    removed = record.is_file()
+    if removed:
+        record.unlink()
+    return (f'  version: none recorded ({why}), so this vault gets no update notices'
+            + (f'; the old .brain/{record.name} was removed' if removed else ''))
 
 
 def script_command(vault: Path, name: str) -> str:
@@ -340,6 +370,7 @@ def install(vault: Path, given_config: Path | None, home: Path, scope: str,
             skipped.append(f"  instructions: skipped for {', '.join(absent)} (command not on PATH)")
     agy_skills = (skills_hub.plan_agy(vault, home)  # raises before any write
                   if skills and scope == 'user' and 'agy' in cfg['harnesses'] else None)
+    version, no_version = release_version()
 
     report = [f'NeoMyelin -> {vault}']
     # The config goes first: it is what marks .brain/ as ours on the next run.
@@ -353,6 +384,7 @@ def install(vault: Path, given_config: Path | None, home: Path, scope: str,
     written = [str(rel) for rel, data in _brain_files(vault).items()
                if _write_if_changed(vault / '.brain' / rel, data)]
     report.append(f'  brain: {len(written)} files written' + (f" ({', '.join(written)})" if written else ''))
+    report.append(_record_version(vault, version, no_version))
     changed = _write_if_changed(vault / 'brain.py', ENGINE.read_bytes())
     report.append(f"  engine: brain.py {'written' if changed else 'unchanged'} (receipts, tasks, daily view)")
     report += apply_layout(layout, vault)

@@ -6,6 +6,11 @@ days and exact whole quotes make a new pattern binding. Existing patterns keep c
 evidence while sleeping and may wake when they outrank the context budget. Vetoes persist
 with their evidence fingerprint. Stale status, attitude area, positive direction, and
 counter evidence remain in the evidence ledger. Only binding patterns reach Personality.
+
+The model reads the pending observations (finished days after the last scan) and, as context,
+those of the HISTORY_DAYS days up to the last scan, so a new pattern can complete its three
+days; it is written only when one of its quotes comes from a pending day. Each run's raw reply
+is kept in `.brain/.state/` (LAST_REPLY) and its summary appended to LOG, which doctor.py reads.
 """
 from __future__ import annotations
 
@@ -23,6 +28,11 @@ import evidence
 import stage
 
 THRESHOLD = 3
+# Earlier days the model sees beside the pending ones. Seeing only the pending day, a nightly run
+# can never reach three days, and wrote "0 added" every night without an error.
+HISTORY_DAYS = 30
+LOG = 'patterns.log'
+LAST_REPLY = 'patterns-last-reply.md'
 DEFAULT_BUDGET = 1800
 BLOCK = re.compile(r'(?ms)^## Pattern: ([^\r\n]+)\r?\n(.*?)(?=^## Pattern: |\Z)')
 MARK = re.compile(r'<!-- neomyelin:([0-9a-f]{12}) -->')
@@ -97,6 +107,18 @@ def advance_scan(text: str, through: dt.date) -> str:
     return text[:first + 1] + line + '\n' + text[first + 1:] if first >= 0 else text + '\n' + line + '\n'
 
 
+def observations(vault: Path, ledger: str, finished: dt.date,
+                 days: int = HISTORY_DAYS) -> tuple[list[dict], list[dict]]:
+    """Pending lines (finished days after the last scan) and history (the `days` days up to and
+    including the last scan). Without a last scan everything is pending and there is no history."""
+    scanned = last_scan(ledger)
+    pending = evidence.all_sources(vault, through=finished, after=scanned)
+    if scanned is None or days <= 0:
+        return pending, []
+    return pending, evidence.all_sources(vault, through=scanned,
+                                         after=scanned - dt.timedelta(days=days))
+
+
 def binding_rules(cfg: dict, existing: list[dict]) -> list[str]:
     """Give the model the existing rules so narrower duplicates are not proposed."""
     vault = config.vault_path(cfg)
@@ -118,8 +140,14 @@ def binding_rules(cfg: dict, existing: list[dict]) -> list[str]:
     return list(dict.fromkeys(output))
 
 
-def prompt(sources: list[dict], existing: list[dict], cfg: dict) -> str:
-    data = [{'day': item['day'], 'ref': item['ref'], 'line': item['line']} for item in sources]
+def _rows(sources: list[dict]) -> str:
+    return json.dumps([{'day': item['day'], 'ref': item['ref'], 'line': item['line']}
+                       for item in sources], ensure_ascii=False)
+
+
+def prompt(pending: list[dict], existing: list[dict], cfg: dict,
+           history: list[dict] = ()) -> str:
+    """Pending lines first; history, when there is any, after them and marked as context."""
     known = [{'title': item['title'], 'behavior': item['behavior'], 'status': item['status'],
               'area': item['area'], 'direction': item['direction']} for item in existing]
     binding = binding_rules(cfg, existing)
@@ -128,7 +156,8 @@ def prompt(sources: list[dict], existing: list[dict], cfg: dict) -> str:
         binding_text = binding_text[:5990].rsplit('\n', 1)[0] + '\n- ...'
     return (f"Write in {cfg['language']}. Use only the marked OBSERVATION, REACTION, or CORRECTION "
             'lines below. A new pattern needs exact whole quoted phrases from three different '
-            'finished days. Do not infer feelings or motives. Keep attitude as an area when '
+            'finished days, at least one of them a pending observation. Do not infer feelings or '
+            'motives. Keep attitude as an area when '
             'appropriate; set direction to positive for a beneficial preference. If an '
             'observation supports an existing active or sleeping pattern, return kind=evidence '
             'with that exact title and the new quotes instead of a duplicate pattern. Use '
@@ -139,8 +168,11 @@ def prompt(sources: list[dict], existing: list[dict], cfg: dict) -> str:
             'marked line. A restatement or narrower version of a binding rule is not a new '
             'pattern. [] is valid.\nBinding rules:\n'
             f'{binding_text}\nExisting patterns: '
-            f'{json.dumps(known, ensure_ascii=False)}\nObservations: '
-            f'{json.dumps(data, ensure_ascii=False)}')
+            f'{json.dumps(known, ensure_ascii=False)}\nPending observations: {_rows(pending)}'
+            + (f'\nEarlier observations, the {HISTORY_DAYS} days before (context only: they may '
+               'complete the three days of a new pattern or add evidence to an existing one, but '
+               'every new pattern cites at least one pending observation): '
+               f'{_rows(history)}' if history else ''))
 
 
 def candidate(raw: object, sources: dict[str, list[dict]]) -> dict | None:
@@ -323,7 +355,7 @@ def write_personality(cfg: dict | None = None, *, dry_run: bool = False) -> str:
 
 
 def _log(state: Path, message: str) -> None:
-    target = state / 'patterns.log'
+    target = state / LOG
     stamp = dt.datetime.now().astimezone().isoformat(timespec='seconds')
     lines = _read(target).splitlines()[-199:]
     stage.atomic_write(target, '\n'.join(lines + [f'{stamp} {message}']) + '\n')
@@ -342,25 +374,30 @@ def run(cfg: dict | None = None, *, dry_run: bool = False,
         print('No unscanned observations.')
         return 0
     all_sources = evidence.all_sources(vault, through=finished)
-    if len({source['day'] for source in all_sources}) < THRESHOLD:
+    state = vault / '.brain' / '.state'
+    days = len({source['day'] for source in all_sources})
+    if days < THRESHOLD:
         print(f'No pattern: observations cover fewer than {THRESHOLD} days.')
+        if not dry_run:
+            # Not a model run; the line shows doctor.py that the step runs and why it waits.
+            _log(state, f'Patterns: waiting, observations cover {days} of {THRESHOLD} days; no model call.')
         return 0
     if dry_run:
         print(f'Dry run: {len(pending)} pending observations; no model call or write.')
         return 0
-    state = vault / '.brain' / '.state'
     with stage.exclusive_lock(state / 'patterns.lock') as acquired:
         if not acquired:
             print('Pattern evolution is already running.')
             return 0
         try:
             before = _read(evidence_path, EMPTY)
-            pending = evidence.all_sources(vault, through=finished, after=last_scan(before))
+            scanned = last_scan(before)
+            pending, history = observations(vault, before, finished)
             if not pending:
                 print('No unscanned observations.')
                 return 0
             sources_by_ref: dict[str, list[dict]] = {}
-            for source in all_sources:
+            for source in pending + history:
                 sources_by_ref.setdefault(source['ref'], []).append(source)
             source_files = []
             for ref in sorted(sources_by_ref):
@@ -368,8 +405,9 @@ def run(cfg: dict | None = None, *, dry_run: bool = False,
                 path = vault / relative
                 if path.is_file():
                     source_files.append((path, f'sources/{relative}'))
-            proposals = stage.ask_json(prompt(all_sources, entries(before), cfg), cfg,
-                                       job='evolution', source_files=source_files)
+            proposals = stage.ask_json(prompt(pending, entries(before), cfg, history), cfg,
+                                       job='evolution', source_files=source_files,
+                                       reply_path=state / LAST_REPLY)
             # Verify again against the source files as they stand after the model call.
             # A receipt can be edited while the model is thinking.
             fresh_sources = evidence.all_sources(vault, through=finished)
@@ -401,6 +439,11 @@ def run(cfg: dict | None = None, *, dry_run: bool = False,
                     if same is not None:
                         current, changed = add_counter_evidence(current, same, item['evidence'])
                         updated += int(changed)
+                    continue
+                # History is context only: a pattern built from old lines alone would be
+                # proposed again every night, so one quote must come from a pending day.
+                if scanned is not None and not any(proof['day'] > scanned.isoformat()
+                                                   for proof in item['evidence']):
                     continue
                 if same or title in known_titles or key(item['behavior']) in known_behaviors:
                     continue

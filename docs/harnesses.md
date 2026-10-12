@@ -36,8 +36,8 @@ hooks belong to another brain. In every file our entries sit next to whatever el
 | SessionStart | `memory_context.py --session-start` | same | — (PreInvocation below) |
 | UserPromptSubmit | `prompt_recall.py --prompt-submit`; `receipt_gate.py --event UserPromptSubmit` | same two | no event used |
 | PostToolUse | `receipt_gate.py --event PostToolUse` (`Edit\|Write\|MultiEdit\|NotebookEdit\|apply_patch`) | same | no event used |
-| PreToolUse | `git_gate.py --pre-tool-use` (`Bash\|PowerShell`); `heredoc_gate.py --pre-tool-use` (`Bash`) | same two, no matcher | no event used |
-| Stop | `receipt_gate.py --event Stop` | same | `receipt_gate.py --harness agy --event Stop` |
+| PreToolUse | `git_gate.py --pre-tool-use` (`Bash\|PowerShell`); `session_gate.py --pre-tool-use` (every tool); `heredoc_gate.py --pre-tool-use` (`Bash`) | same three, no matcher | no event used |
+| Stop | `receipt_gate.py --event Stop`; `receipt_commit.py` | same two | `receipt_gate.py --harness agy --event Stop`; `receipt_commit.py` |
 | PreInvocation | — | — | `.brain/hooks/agy_hook.py` |
 
 - **Claude Code** also gets `env.PYTHONUTF8=1` in its settings (on Windows Python would otherwise
@@ -125,8 +125,13 @@ for a snap with one line saying so, and still writes the instruction block into 
 ## 6. What each per-turn hook decides
 
 - **Recall** (`prompt_recall.py`) searches with recall's engine without waiting for indexing (a
-  detached `recall.py --update` at most every 5 minutes), within an 8-second budget. With Ollama:
-  a 0.48 floor on the session's first prompt and 0.58 later (not measured). With BM25: a strict
+  detached `recall.py --update`, no console window, at most every 5 minutes), within an 8-second
+  budget. It takes 40 candidates and shows up to 3 knowledge notes first, then up to 2 of
+  everything else (receipts, tasks, skills, hub files); skills' `SKILL.md` files are indexed. With
+  Ollama: a 0.48 floor on the session's first prompt and 0.52 later (the author's 30-question blind
+  set on the same `bge-m3`: 0.58 hid 10 of 21 knowledge targets; noise not measured). A prompt
+  naming one of the vault's skills (not an everyday-word name from config) also gets a `[Skill]`
+  line with its `SKILL.md` path, hits or not. With BM25: a strict
   rule (2+ shared words, relative-idf weight >= 0.30; the threshold is Avenox V3's calibration,
   not re-measured here), with words found in more than half of the notes dropped instead of a
   stopword list, so it holds in any language. Only the first prompt says "nothing found" or
@@ -152,11 +157,26 @@ for a snap with one line saying so, and still writes the instruction block into 
   nothing. Measured on 11 languages and 5 scripts in `tests/unit/test_language_gate.py`, not in
   a live session. agy's events carry neither text, so agy has no language check. When several
   reminders are due at one Stop, they go out as one block.
+- **Session gate** (`session_gate.py`): before a write (Edit/Write by path, `apply_patch` by its
+  file lines, a writing shell command), it reads the prompt hook's session markers; a target in a
+  folder where another session was active in the last 45 minutes is denied once with "ask that
+  session first" and its topic, and the second try on that folder passes. The vault root, home and
+  drive roots are shared ground. Its own errors never block.
+- **Receipt commit** (`receipt_commit.py`, Stop): commits only `receipts/` and `daily/` with the
+  user's git identity, leaves anything else staged or edited as it was, and pushes in a detached
+  child with no console window. Busy repos (lock, rebase, merge) are skipped and the nightly commit
+  catches them; a failed commit or push is logged and raises a health warning.
 - **Nightly run:** `memory_context.py --session-start` checks the local `nightly_at` (default
   `21:00`) against `.brain/.state/nightly.last-run`. Once due, it detaches `nightly.py` and returns
   the context without waiting; a launch marker and `nightly.lock` stop overlapping starts. Each
   step logs one result to `.brain/.state/nightly.log`. A finished run writes the stamp even if a
   step failed, so the next session does not repeat a partly failed night.
+- **Update notice** (`updates.py`, from the same session start): never on the network itself. It
+  reads `.brain/.state/update-check.json` and, when GitHub's latest release is newer than
+  `.brain/VERSION` (written by the installer from the release's `VERSION`), adds one
+  `[Memory: Update]` line once per version; when a check is due (a day, or 1 h / 6 h / a day after
+  failures) it detaches a short check of the latest-release API. So a release shows from the
+  session after the one that found it. Off with `update_notice: false` or `NEOMYELIN_UPDATE_NOTICE=off`.
 - **Child sessions:** `NEOMYELIN_INVOKED_BY` in the environment of a model CLI the layer starts
   (`engine.ask`: `claude -p`, `codex exec` or `agy -p`) keeps that session from loading memory or
   starting another nightly run.

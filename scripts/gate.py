@@ -6,7 +6,8 @@
    package, and both may hold a module of the same name).
 3. Greps tracked and new files for personal data: the owner's drive path (DRIVE below), the
    owner's name, email addresses. AGENTS.md, notes.md, tasks/, docs/ and reports/ are the project's own
-   records and are skipped.
+   records and are skipped, except what is published from docs/: docs/releases/ (the GitHub
+   release body) and docs/harnesses.md (shipped in the release ZIP; release.py PRODUCT).
 """
 from __future__ import annotations
 
@@ -20,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST_DIRS = ('tests/unit', 'tests/acceptance')
 SKIPPED = ('AGENTS.md', 'notes.md')
 SKIPPED_DIRS = ('tasks/', 'docs/', 'reports/')
+# Inside a skipped folder, but published. A name in release.py's PRODUCT under docs/ belongs here:
+# docs/harnesses.md once carried the owner's name past a green gate to the release check (2026-10-12).
+SCANNED_DIRS = ('docs/releases/', 'docs/harnesses.md')
 # Built from parts so this file does not flag itself.
 DRIVE = 'D' + ':/'
 NAME = re.compile('tar' + '[i\u0131]' + 'k', re.IGNORECASE)
@@ -69,7 +73,7 @@ def _test_env() -> dict[str, str]:
 
 
 def skipped(relative: str) -> bool:
-    return relative in SKIPPED or relative.startswith(SKIPPED_DIRS)
+    return relative in SKIPPED or (relative.startswith(SKIPPED_DIRS) and not relative.startswith(SCANNED_DIRS))
 
 
 def personal_data(text: str) -> list[str]:

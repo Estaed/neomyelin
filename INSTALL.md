@@ -204,6 +204,17 @@ py -3 install.py --vault "<vault path>" [--statusline]
 the user's own, and step 6. Notes, receipts, the personality and every user line are kept; only
 NeoMyelin's own files and entries change.
 
+**How the user hears of a new release.** The installer records the release's version in
+`.brain/VERSION`. At most once a day a session start asks GitHub, in the background, for the
+latest NeoMyelin release and keeps only its version number and page; the session never waits for
+it. When that release is newer, the assistant's first reply in a following session says so once,
+with the link to its release notes and this section. An install from a copy without a `VERSION`
+file (a clone of the development repository) records no version and never shows the notice.
+
+To turn the notice off, add `"update_notice": false` to the vault's `.brain/config.json`, or set
+the environment variable `NEOMYELIN_UPDATE_NOTICE=off`. Either one stops the check as well as the
+notice; remove it to turn the notice back on.
+
 ## Uninstalling
 
 If the user asks to remove NeoMyelin: the release folder from the install was deleted, so

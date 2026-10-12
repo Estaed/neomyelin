@@ -6,6 +6,8 @@ config.py; the hook prints one JSON object whose `additionalContext` the harness
 the new session:
 
     [Memory: Identity]      who the assistant is, for whom, in which language
+    [Memory: Update]        a newer NeoMyelin release, once per version (updates.py: the cache
+                            only; a due check runs detached and never holds the session up)
     [Memory: Session]       the receipt `session` value the receipt reminder (receipt_gate.py) matches
     [Memory: Rules]         <companion>/Rules.md, whole
     [Memory: Core]          <companion>/Core.md, whole
@@ -706,6 +708,13 @@ def _start_nightly(cfg: dict, warnings: list[str]) -> None:
         warnings.append(f'[Memory warning] nightly run did not start: {exc}')
 
 
+def _update_line(cfg: dict, start: bool) -> str:
+    """`[Memory: Update]` when a newer release is cached and not yet told; starts the detached
+    check when one is due (updates.py). Reads vault files only, never the network."""
+    import updates  # noqa: PLC0415 - a layout without it costs this line only
+    return updates.session_notice(cfg, start=start)
+
+
 def _identity(cfg: dict, vault: Path) -> str:
     return (f"[Memory: Identity] You are {cfg['assistant_name']}, {cfg['user_name']}'s assistant. "
             f"Speak and write vault notes in {cfg['language']}. Memory vault: {vault.as_posix()}")
@@ -768,7 +777,9 @@ def session_start_context(hook_input: str, *, cfg: dict | None = None, emit: boo
     }
     values = {key: _clip(value, CAPS[key], _more(sources[key])) if key in CAPS else value
               for key, value in raw.items()}
-    head = [_identity(cfg, vault)] + ([check_line] if check_line else [])
+    update_line = _quiet('', warnings, _update_line, cfg, warm)
+    head = ([_identity(cfg, vault)] + ([check_line] if check_line else [])
+            + ([update_line] if update_line else []))
 
     if warm:
         _start_recall_warmup(warnings)

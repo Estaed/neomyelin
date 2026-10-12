@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -83,9 +84,23 @@ def run_in_stage(prompt: str, stage: Path, *, job: str, cfg: dict | None = None)
     return answer
 
 
+def keep_reply(path: Path, text: str) -> None:
+    """Save a model's raw reply; a failed save warns and never stops the job."""
+    try:
+        atomic_write(path, text)
+    except OSError as exc:
+        print(f'WARNING: could not save the model reply to {path}: {exc}', file=sys.stderr)
+
+
 def ask_json(prompt: str, cfg: dict, *, job: str = 'evolution',
-             source_files: list[tuple[Path, str]] | None = None) -> list:
-    """Read a JSON list from a staged model call; copy only the needed sources."""
+             source_files: list[tuple[Path, str]] | None = None,
+             reply_path: Path | None = None) -> list:
+    """Read a JSON list from a staged model call; copy only the needed sources.
+
+    With `reply_path`, the raw reply is saved there before it is parsed, so a run that wrote
+    nothing shows what the model said: `[]`, prose, or broken JSON. A failed call or an empty
+    reply leaves a note there instead, never the previous run's reply.
+    """
     with stage(f'{job}-stage-') as work:
         atomic_write(work / 'instruction_prompt.txt', prompt)
         for source, relative in source_files or []:
@@ -93,9 +108,18 @@ def ask_json(prompt: str, cfg: dict, *, job: str = 'evolution',
             if source.is_file():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
-        answer = run_in_stage(prompt, work, job=job, cfg=cfg).strip()
+        try:
+            raw = run_in_stage(prompt, work, job=job, cfg=cfg)
+        except Exception as exc:
+            if reply_path is not None:
+                keep_reply(reply_path, f'(no reply kept: the model call failed: {exc})\n')
+            raise
+        answer = raw.strip()
         if not answer and (work / 'candidate.json').is_file():
-            answer = (work / 'candidate.json').read_text(encoding='utf-8').strip()
+            raw = (work / 'candidate.json').read_text(encoding='utf-8')
+            answer = raw.strip()
+    if reply_path is not None:
+        keep_reply(reply_path, raw if answer else '(the model replied with nothing)\n')
     if answer.startswith('```'):
         answer = answer.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
     result = json.loads(answer)

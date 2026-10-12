@@ -16,8 +16,11 @@ Optional `companion_dir` (vault-relative) names the companion folder. Without it
 COMPANION, or the one folder whose name ends in "companion", or the one holding Core.md (so a
 vault that already has a companion folder keeps it). Optional
 `projects_root` (absolute) is the folder holding the user's project folders; the session start
-in the vault names each one there without a card in PROJECTS. `NEOMYELIN_CONFIG` points at
-another config file (tests).
+in the vault names each one there without a card in PROJECTS. Optional `everyday_skills` (a list
+of skill names) replaces EVERYDAY_SKILLS: the skills whose names are everyday words, which never
+get the per-prompt `[Skill]` line. Optional `update_notice` (default true): false stops the
+background release check and the `[Memory: Update]` line (updates.py); so does the environment
+variable UPDATE_NOTICE_ENV set to `off`. `NEOMYELIN_CONFIG` points at another config file (tests).
 """
 from __future__ import annotations
 
@@ -48,6 +51,16 @@ FOLDERS = ('200-Goals \N{CROSSED SWORDS}' + _VS16, '300-Education \N{GRADUATION 
            '900-Archive \N{PACKAGE}')
 # Project cards live here: a note whose frontmatter has `path:` (the project folder) and `label:`.
 PROJECTS = FOLDERS[3]
+# Skills whose names are everyday words: a prompt saying "limit" or "research" is rarely about the
+# skill, and prompt_recall's `[Skill]` line would fire on every such prompt. The original also listed
+# one word of its owner's language for a skill only that brain has.
+EVERYDAY_SKILLS = ('limit', 'readme', 'research')
+# Where NeoMyelin releases are published; updates.py asks its latest-release API once a day.
+RELEASE_REPO = 'Estaed/neomyelin'
+# The update notice's off switches: this config key set to false, or this variable set to
+# off/0/false/no. Off means no check and no line.
+UPDATE_NOTICE_KEY = 'update_notice'
+UPDATE_NOTICE_ENV = 'NEOMYELIN_UPDATE_NOTICE'
 
 
 class ConfigError(ValueError):
@@ -125,6 +138,12 @@ def validate(data: object) -> dict:
     engine = data.get('engine', 'auto')
     if engine not in ('auto', *HARNESSES):
         raise ConfigError('"engine" must be auto, claude, codex or agy')
+    everyday = data.get('everyday_skills')
+    if everyday is not None and (not isinstance(everyday, list)
+                                 or any(not isinstance(name, str) or not name.strip() for name in everyday)):
+        raise ConfigError('"everyday_skills" must be a list of skill names')
+    if not isinstance(data.get(UPDATE_NOTICE_KEY, True), bool):
+        raise ConfigError(f'"{UPDATE_NOTICE_KEY}" must be true or false')
     return dict(data)
 
 
@@ -152,6 +171,12 @@ def projects_root(cfg: dict) -> Path | None:
     """The folder holding the user's project folders, when the config names one."""
     value = cfg.get('projects_root')
     return Path(value).expanduser().resolve() if isinstance(value, str) and value.strip() else None
+
+
+def everyday_skills(cfg: dict) -> set[str]:
+    """Skill names the `[Skill]` line ignores, casefolded: the config's list, else EVERYDAY_SKILLS."""
+    names = cfg.get('everyday_skills')
+    return {name.strip().casefold() for name in (EVERYDAY_SKILLS if names is None else names)}
 
 
 def companion_dir(cfg: dict) -> Path | None:
