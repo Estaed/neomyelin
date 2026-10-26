@@ -14,8 +14,9 @@ What it searches: the vault's notes, receipts and open tasks (the scope comment 
 dot folder, with one exception: each skill's SKILL.md in the vault's skills hub
 (`.brain/skills/<name>/SKILL.md`; not its references/ or anything else in `.brain/`), so a
 question about a skill finds what the skill says. A note's `symptoms: ["...", "..."]` frontmatter
-line (when the note is needed, in the user's own words) is searched as one more chunk of it, so a
-question asked with the symptom finds a note titled after the fix.
+line (when the note is needed, in the user's own words) is searched as more chunks of it, all the
+lines together and each line alone, so a question asked with any one symptom finds a note titled
+after the fix.
 
 WHY BOTH (measured on a 120-note vault, 20 queries, blind run):
 
@@ -126,9 +127,14 @@ ARCHIVE = config.ARCHIVE
 PRIVATE = config.PRIVATE
 CLOSED_TASK = {'done', 'cancelled'}
 # A note's frontmatter `symptoms: ["...", "..."]` (same rules as `aliases`): when it is needed, in
-# the user's own words. Indexed as one extra chunk of the note (build).
+# the user's own words. Indexed as extra chunks of the note: the lines joined, then each line alone
+# (symptom_pieces).
 SYMPTOMS = 'symptoms'
 SYMPTOM_CHUNK = 'When needed: '
+# The chunk layout every index record is written in, kept per note so an update re-chunks only the
+# notes whose chunks change, without --rebuild: 2 adds a chunk per symptom line. A record without
+# it was written by an earlier release; its chunks are layout 2's unless the note has symptom lines.
+SCHEME = 2
 # A note about a retired mechanism says so in its first 20 lines; its preview says so too.
 HISTORICAL = {'status: historical'}
 HISTORY_LINE = ('> History',)
@@ -249,6 +255,14 @@ def _aliases(raw: str, field: str = 'aliases') -> list[str]:
 def symptom_lines(raw: str) -> list[str]:
     """The note's `symptoms:` lines as recall reads them (doctor.py flags a note without any)."""
     return _aliases(raw, SYMPTOMS)
+
+
+def symptom_pieces(symptoms: list[str]) -> list[str]:
+    """The chunks a note's symptom lines add: all of them joined, then each one alone; none
+    without lines."""
+    if not symptoms:
+        return []
+    return [SYMPTOM_CHUNK + ' / '.join(symptoms)] + [SYMPTOM_CHUNK + line for line in symptoms]
 
 
 # doctor.py flags a knowledge note written without a `symptoms:` line, but not one that was there
@@ -463,17 +477,29 @@ def _save_index(engine: str, index: dict) -> None:
     os.replace(temporary, path)
 
 
+def _rechunk_due(record: dict, data: bytes) -> bool:
+    """The note's record predates SCHEME and the note has symptom lines, so its index holds them
+    joined in one chunk only. Without symptom lines the earlier chunks are SCHEME's already."""
+    if record.get('scheme') == SCHEME:
+        return False
+    try:
+        return bool(symptom_lines(data.decode('utf-8-sig')))
+    except UnicodeDecodeError:
+        return False
+
+
 def staleness(stored: dict, docs: dict[str, Path]) -> tuple[int, int]:
-    """(changed or new, removed) documents. Hashes only, no embedding, so it runs on every
-    query: a stale index raises no error, it just answers from the past, and a wrong answer
-    that looks trustworthy is worse than an error."""
+    """(changed, new or due a re-chunk; removed) documents. Hashes only, no embedding, so it runs
+    on every query: a stale index raises no error, it just answers from the past, and a wrong
+    answer that looks trustworthy is worse than an error."""
     changed = 0
     for key, path in docs.items():
         try:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            data = path.read_bytes()
         except OSError:
             continue
-        if stored.get(key, {}).get('hash') != digest:
+        record = stored.get(key, {})
+        if record.get('hash') != hashlib.sha256(data).hexdigest() or _rechunk_due(record, data):
             changed += 1
     removed = sum(1 for key in stored if key not in docs)
     return changed, removed
@@ -495,7 +521,7 @@ def build(engine: str, full: bool = False, log=lambda line: None) -> dict:
         if key not in docs:
             del stored[key]
     started = time.monotonic()
-    changed = written = 0
+    changed = written = rechunked = 0
     truncated: list[str] = []
     unreadable: list[str] = []
     try:
@@ -508,19 +534,27 @@ def build(engine: str, full: bool = False, log=lambda line: None) -> dict:
             # Hash the RAW bytes, as staleness() does. Hashing decoded text here would never match
             # for a CRLF or BOM file: it would count as changed and be re-indexed on every run.
             digest = hashlib.sha256(data).hexdigest()
-            if stored.get(key, {}).get('hash') == digest:
+            record = stored.get(key)
+            unchanged = bool(record) and record.get('hash') == digest
+            if unchanged and not _rechunk_due(record, data):
+                # Its chunks are SCHEME's: an earlier release's record of a note without symptom
+                # lines is only marked, never re-embedded.
+                record['scheme'] = SCHEME
                 continue
+            # New, changed, or unchanged but written before SCHEME with symptom lines (re-chunked).
+            # Until this run saves, every query reads the index file as it was (_save_index
+            # replaces it whole, at the end): answered from the old chunks, never "index empty".
             try:
                 raw = data.decode('utf-8-sig')
             except UnicodeDecodeError:
                 # No silent skip: the hash is kept (so the file stops counting as stale) and the
                 # run says its content is not searchable.
-                stored[key] = {'hash': digest, 'label': key, 'chunks': []}
+                stored[key] = {'hash': digest, 'label': key, 'chunks': [], 'scheme': SCHEME}
                 unreadable.append(key)
                 continue
             body = _body(key, raw)
             if not body or (_meta(raw) or {}).get('generated') is True:
-                stored[key] = {'hash': digest, 'label': key, 'chunks': []}
+                stored[key] = {'hash': digest, 'label': key, 'chunks': [], 'scheme': SCHEME}
                 continue
             pieces, clipped = _split(body)
             if clipped:
@@ -528,31 +562,41 @@ def build(engine: str, full: bool = False, log=lambda line: None) -> dict:
             # Notes are titled after the fix, while the question comes with the symptom ("why does
             # the grain not show on the other screen" vs "CSS variable url() resolves against the
             # stylesheet"); in the original's blind sets most misses were that. The `symptoms:`
-            # line, in the user's own words for the moment the note is needed, is its own chunk:
-            # it does not dilute the content chunks, and a note scores by its best chunk anyway.
+            # line, in the user's own words for the moment the note is needed, gets chunks of its
+            # own: they do not dilute the content chunks, and a note scores by its best chunk anyway.
             # Measured in the original: the prompt hook showed the target 26 -> 29 of 30 on the
-            # first prompt, 24 -> 28 later, hit@1 20 -> 24, noise unchanged.
-            symptoms = symptom_lines(raw)
-            if symptoms:
-                pieces = pieces + [SYMPTOM_CHUNK + ' / '.join(symptoms)]
+            # first prompt, 24 -> 28 later, hit@1 20 -> 24, noise unchanged. Joined in one chunk,
+            # unrelated lines averaged out in one vector, and a note could miss even when asked
+            # with its own line; so each line is a chunk too (the original measured each line
+            # alone, without the joined chunk, as worse on its hard set). Measured on a 30-note
+            # fixture with bge-m3: reworded symptom lines hit@1 19 -> 21 of 26, the hook's later
+            # prompt showed the target 19 -> 22, and 3 more other notes crossed its 0.52 bar
+            # (7 -> 10); bm25 hit@1 8 -> 9, hook unchanged. On a 1883-note vault the hook's slots
+            # are full, so a newly matching note takes another's place: target 17 -> 19 of 34,
+            # other notes above the bar 235 -> 234. The extra rows show only while a vault is small.
+            pieces = pieces + symptom_pieces(symptom_lines(raw))
             label = _label(key, raw)
             # Every chunk carries the document identity ("contextual chunking"): a chunk from
             # the middle of a long note does not say what it belongs to, and without the prefix
             # it matched queries on surface words. The preview stays the raw text.
-            stored[key] = {'hash': digest, 'label': label, 'chunks': _chunks(engine, label, pieces)}
+            stored[key] = {'hash': digest, 'label': label, 'chunks': _chunks(engine, label, pieces),
+                           'scheme': SCHEME}
             changed += 1
+            rechunked += unchanged
             written += len(pieces)
             if changed % 20 == 0:
                 log(f'  [{order}/{len(docs)}] {changed} notes, {written} chunks')
     finally:
         _save_index(engine, index)
-    return {'engine': engine, 'docs': len(stored), 'changed': changed, 'chunks': written,
-            'seconds': round(time.monotonic() - started, 1), 'truncated': truncated,
+    return {'engine': engine, 'docs': len(stored), 'changed': changed, 'rechunked': rechunked,
+            'chunks': written, 'seconds': round(time.monotonic() - started, 1), 'truncated': truncated,
             'unreadable': unreadable}
 
 
 def build_report(summary: dict) -> list[str]:
-    lines = [f"index ({summary['engine']}): {summary['docs']} notes | {summary['changed']} changed, "
+    rechunked = (f" ({summary['rechunked']} unchanged, re-chunked for their symptom lines)"
+                 if summary.get('rechunked') else '')
+    lines = [f"index ({summary['engine']}): {summary['docs']} notes | {summary['changed']} changed{rechunked}, "
              f"{summary['chunks']} chunks this run | {summary['seconds']} s"]
     if summary['truncated']:
         lines.append(f"WARNING: {len(summary['truncated'])} notes CUT at {MAX_CHUNKS} chunks, their end is "
@@ -606,8 +650,19 @@ def _search_with(engine: str, query: str, k: int, min_score: float | None, refre
     floor = MIN_SCORE[engine] if min_score is None else min_score
     scored = [row for row in scored if row[0] > 0 and row[0] >= floor]
     scored.sort(key=lambda row: (-row[0], row[1]))
-    return [{'score': round(score, 4), 'path': key, 'preview': _summary(vault, key) or text}
+    return [{'score': round(score, 4), 'path': key,
+             'preview': _summary(vault, key) or _content_preview(stored[key], text)}
             for score, key, text in scored[:k]]
+
+
+def _content_preview(record: dict, text: str) -> str:
+    """Preview of a note without a first paragraph: the best chunk's text, unless that is a
+    symptom chunk (the line a note was found by is not what it says); then the note's first
+    content chunk, which comes before its symptom chunks in every SCHEME, else its label."""
+    if not text.startswith(SYMPTOM_CHUNK):
+        return text
+    return next((chunk['text'] for chunk in record.get('chunks') or []
+                 if not chunk['text'].startswith(SYMPTOM_CHUNK)), record.get('label') or '')
 
 
 def search(query: str, k: int = 5, min_score: float | None = None, refresh: bool = True,

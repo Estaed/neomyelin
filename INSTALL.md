@@ -192,6 +192,8 @@ this exact folder (not a folder above it, or Obsidian sees the vault as one of i
 
 ## Updating
 
+What changed since the user's version is in `CHANGELOG.md` (newest first); tell them in a few lines.
+
 Run step 3 with the new release, then step 5.2 without `--config`: the installer reuses the
 vault's own `.brain/config.json` (the config file from the first install was deleted with the
 temporary folder):

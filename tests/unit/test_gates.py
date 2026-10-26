@@ -60,6 +60,7 @@ class GitGateTests(GateTestCase):
             'git checkout -- .': 'git checkout -- .',
             'git reset --hard': 'git reset --hard',
             'cd repo && git reset --hard HEAD~1': 'git reset --hard',
+            'echo "x; git reset --hard"': 'git reset --hard',  # the split leaves `--hard"`
             'git -C repo clean -fd': 'git clean -f',
             'git restore .': 'git restore .',
             'git stash': 'git stash (no paths)',

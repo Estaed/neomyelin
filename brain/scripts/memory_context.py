@@ -19,20 +19,26 @@ the new session:
                             tasks of this project (tasks/); five lines. A session
                             inside the vault keeps two of them for hygiene: a project folder under
                             `projects_root` with no card, a knowledge note missing from the index
+    [Memory: Projects]      the user's open projects, one line per card in config.PROJECTS (status
+                            active, waiting or none; see _open_projects), in every folder, so a
+                            session sees that a project exists before it proposes building it anew
 
 Which project a session is in comes from the hook's `cwd` (else the process's): inside the vault
 it is the vault; in a folder a project card in config.PROJECTS points at (frontmatter `path:` and
 `label:`), that project; else the label the vault already knows from the folder's names, else the
-folder's own name (see project_label). So a folder nothing names shows only its own record and the
-due tasks, never another project's; the vault-level record (every open task, the hygiene lines)
-is shown only inside the vault. A receipt belongs to a label when its first line starts `[label]`;
-a task when its `project` is the label. Each reminder source fails alone: a broken one becomes one
-warning line, never a broken hook.
+folder's own name (see project_label). The record and the tasks stay that project's own: a folder
+nothing names shows only its own record and the due tasks; the vault-level record (every open
+task, the hygiene lines) is shown only inside the vault. The open projects list shows everywhere.
+A receipt belongs to a label when its first line starts `[label]`; a task when its `project` is
+the label. Each reminder source fails alone: a broken one becomes one warning line, never a
+broken hook.
 
 Labels are English; the vault text under them stays in whatever language it was written in.
 Only the growing sections are clipped. Rules, Core and Personality print whole: a byte cap
 once silently cut the two strongest personality lines, so their owners keep them short and
-they are squeezed only as a last resort.
+they are squeezed only as a last resort. Over TOTAL_CAP or HARNESS_CAP the project list gives way
+first: to names only, then, after the last receipt, entirely; only then are the reminders (the
+alarms at their head) and Core and Personality cut.
 """
 from __future__ import annotations
 
@@ -58,7 +64,11 @@ import config  # noqa: E402
 CAPS = {
     'last_receipt': 1600,
     'reminders': 900,
+    # Ten cards of about 120 characters each; the original brain's 900 cut its last two cards.
+    'projects': 1300,
 }
+PROJECT_LINE = 120  # UTF-8 bytes per card line, as the cap counts: ten lines fit in any language
+PROJECT_RANK = {'active': 0, 'waiting': 1, '': 2}  # listed statuses, in list order; '' = no status
 TOTAL_CAP = 11500
 # The harness wall is not bytes but the JS string `.length`, i.e. UTF-16 code units (~10000).
 # The byte budget keeps the sections fair to each other; this cap keeps the whole block off the
@@ -80,7 +90,10 @@ HEADINGS = {
     'personality': '[Memory: Personality]',
     'last_receipt': '[Memory: Last Receipt]',
     'reminders': '[Memory: Reminders]',
+    'projects': '[Memory: Projects]',
 }
+PROJECTS_HINT = ("{user}'s open projects (cards in {folder}/). Check this list before proposing a new "
+                 'product, tool or project; if one already covers it, ask whether the work belongs there.')
 FILES = {'rules': 'Rules.md', 'core': 'Core.md', 'personality': 'Personality.md'}
 
 
@@ -193,8 +206,8 @@ def _project_cards(vault: Path) -> list[tuple[Path, str]]:
     """(project folder, label) of every card in config.PROJECTS, sub-folders included.
 
     A card is a note whose frontmatter has `path:` (the project folder, absolute; forward
-    slashes and `~` are fine) and `label:`. A card without both, or with a relative path, is no
-    card.
+    slashes and `~` are fine) and `label:`. A card without both, or with a relative path, matches
+    no folder (it may still be listed as an open project, _open_projects).
     """
     cards: list[tuple[Path, str]] = []
     root = vault / config.PROJECTS
@@ -210,6 +223,121 @@ def _project_cards(vault: Path) -> list[tuple[Path, str]]:
         if folder and label and Path(folder).expanduser().is_absolute():
             cards.append((Path(folder).expanduser(), label))
     return cards
+
+
+def _card_fields(text: str) -> dict[str, str] | None:
+    """A card's frontmatter fields; {} for a note without frontmatter; None when it is broken:
+    opened and never closed, JSON that is no object, or nothing in it reads as `key: value`."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != '---':
+        return {}
+    if not any(line.strip() == '---' for line in lines[1:]):
+        return None
+    block = '\n'.join(_frontmatter_lines(text)).strip()
+    if block.startswith('{'):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            return None
+        return _simple_frontmatter(text) if isinstance(data, dict) else None
+    fields = _simple_frontmatter(text)
+    return fields if fields or not block else None
+
+
+def _first_prose(body: str) -> str:
+    """The first line of text under a card's heading: headings, blank lines, code, tables,
+    comments and rules are passed over; a list or quote marker is dropped."""
+    fenced = comment = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(('```', '~~~')):
+            fenced = not fenced
+            continue
+        if comment or stripped.startswith('<!--'):  # a comment, on one line or several
+            comment = '-->' not in stripped
+            continue
+        if fenced or not stripped or stripped.startswith(('#', '|', '---', '***', '___')):
+            continue
+        text = re.sub(r'^(?:[-*+>]\s+)+', '', stripped)
+        if text:
+            return text
+    return ''
+
+
+def _open_projects(vault: Path) -> list[tuple[str, str, str]]:
+    """(name, status, summary) of every open card in config.PROJECTS, sub-folders included.
+
+    Open: `status:` active or waiting, or no `status:` at all (cards written before statuses keep
+    showing); done, archived and any other value are left out. The folder notes install puts in
+    every folder (`index.md`) are no cards. A card needs no `path:`: a project with no code
+    folder still exists. The name is `label:`, else the file name; the summary is `summary:`,
+    else the first line of text under the heading, else nothing. A card that cannot be read or
+    whose frontmatter is broken is skipped alone. Order: active, waiting, no status; then by name.
+    """
+    root = vault / config.PROJECTS
+    if not root.is_dir():
+        return []
+    entries: list[tuple[int, str, str, str, str]] = []
+    for path in root.rglob('*.md'):
+        if path.name.casefold() == 'index.md':
+            continue
+        try:
+            text = path.read_text(encoding='utf-8-sig')
+        except (OSError, UnicodeError):
+            continue
+        fields = _card_fields(text)
+        if fields is None:
+            continue
+        status = (fields.get('status') or '').strip().casefold()
+        if status not in PROJECT_RANK:
+            continue
+        name = ' '.join((fields.get('label') or '').split()) or path.stem
+        summary = ' '.join(((fields.get('summary') or '').strip()
+                            or _first_prose(_frontmatter_body(text))).split())
+        entries.append((PROJECT_RANK[status], name.casefold(), name, status, summary))
+    return [(name, status, summary) for _, _, name, status, summary in sorted(entries)]
+
+
+def _project_line(name: str, status: str, summary: str) -> str:
+    line = f'- {name}' + (f' ({status})' if status else '') + (f': {summary}' if summary else '')
+    if len(line.encode('utf-8')) <= PROJECT_LINE:
+        return line
+    room = PROJECT_LINE - len('…'.encode('utf-8'))
+    return line.encode('utf-8')[:room].decode('utf-8', 'ignore').rstrip() + '…'
+
+
+def _project_names(entries: list[tuple[str, str, str]], prefix: str, limit: int) -> tuple[str, int]:
+    """(`- Open: A, B (waiting), C` within `limit` bytes, how many names did not fit and are
+    counted at its end instead)."""
+    line = f'- {prefix}: '
+    for index, (name, status, _) in enumerate(entries):
+        more = len(entries) - index - 1
+        candidate = line + (', ' if index else '') + (f'{name} (waiting)' if status == 'waiting' else name)
+        tail = f', +{more} more in {config.PROJECTS}/' if more else ''
+        if len((candidate + tail).encode('utf-8')) > limit:
+            left = len(entries) - index
+            return line + (', ' if index else '') + f'+{left} more in {config.PROJECTS}/', left
+        line = candidate
+    return line, 0
+
+
+def _projects_text(entries: list[tuple[str, str, str]], names_only: bool = False) -> str:
+    """The section's lines within CAPS['projects']: one line per card while they fit and the rest
+    as one line of names, as many full lines as leave every card named; when even names alone do
+    not fit, the names that fit and a count. `names_only`: the line of names alone."""
+    if not entries:
+        return ''
+    cap = CAPS['projects']
+    full = [] if names_only else [_project_line(*entry) for entry in entries]
+    if len('\n'.join(full).encode('utf-8')) <= cap and len(full) == len(entries):
+        return '\n'.join(full)
+    for keep in range(len(full) - 1 if full else 0, -1, -1):
+        head = '\n'.join(full[:keep])
+        used = len(head.encode('utf-8')) + 1 if keep else 0
+        names, unnamed = _project_names(entries[keep:], 'Also open' if keep else 'Open', cap - used)
+        if not unnamed or not keep:
+            return (head + '\n' if keep else '') + names
+    return ''
 
 
 def _known_labels(vault: Path, cards: list[tuple[Path, str]]) -> set[str]:
@@ -755,6 +883,7 @@ def session_start_context(hook_input: str, *, cfg: dict | None = None, emit: boo
     cards = _quiet([], warnings, _project_cards, vault)
     label = project_label(cwd, vault, cards)
     receipt = _latest_receipt(vault, label)
+    open_projects = _quiet([], warnings, _open_projects, vault)
 
     def companion_file(key: str) -> str:
         return _frontmatter_body(_read(companion / FILES[key], warnings)) if companion else ''
@@ -766,6 +895,7 @@ def session_start_context(hook_input: str, *, cfg: dict | None = None, emit: boo
         'last_receipt': receipt[0] if receipt else '',
         'reminders': _reminders(vault, today, label, vault_mode, companion, cards,
                                 config.projects_root(cfg), warnings),
+        'projects': _projects_text(open_projects),
     }
     companion_name = companion.name if companion else 'companion folder'
     sources = {
@@ -774,7 +904,10 @@ def session_start_context(hook_input: str, *, cfg: dict | None = None, emit: boo
         'personality': f'{companion_name}/{FILES["personality"]}',
         'last_receipt': receipt[1] if receipt else 'receipts/',
         'reminders': 'tasks/',
+        'projects': f'{config.PROJECTS}/',
     }
+    headings = {**HEADINGS, 'projects': f"{HEADINGS['projects']} "
+                + PROJECTS_HINT.format(user=cfg['user_name'], folder=config.PROJECTS)}
     values = {key: _clip(value, CAPS[key], _more(sources[key])) if key in CAPS else value
               for key, value in raw.items()}
     update_line = _quiet('', warnings, _update_line, cfg, warm)
@@ -789,15 +922,24 @@ def session_start_context(hook_input: str, *, cfg: dict | None = None, emit: boo
         sections = head + warnings + ([session_line] if session_line else [])
         for key, value in values.items():
             if value:
-                sections.append(f'{HEADINGS[key]}\n{value}')
+                sections.append(f'{headings[key]}\n{value}')
         return '\n\n'.join(sections)
 
     def squeeze(context: str, cap: int, measure) -> str:
-        # Growing sections shrink first; the whole-printed files only as a last resort.
-        for key in ('last_receipt', 'reminders', 'core', 'personality'):
+        # The project list gives way first: to names only (a name still answers "does it exist
+        # already?"), then, after the last receipt, entirely, so the alarms at the head of the
+        # reminders are never cut while it shows. The whole-printed files only as a last resort.
+        for key in ('project_names', 'last_receipt', 'no_projects', 'reminders', 'core', 'personality'):
             overflow = measure(context) - cap
             if overflow <= 0:
                 break
+            if key in ('project_names', 'no_projects'):
+                shorter = _projects_text(open_projects, names_only=True) if key == 'project_names' else ''
+                if len(shorter.encode('utf-8')) >= len(values['projects'].encode('utf-8')):
+                    continue
+                values['projects'] = shorter
+                context = build()
+                continue
             if not values[key]:
                 continue
             note = _more(sources[key])

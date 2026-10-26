@@ -16,7 +16,7 @@ they look at what went wrong twice and suggest a fix. NeoMyelin gives that noteb
 assistant you already use: Claude Code, Codex or Antigravity.
 
 - **It remembers.** Each session starts with who you are, your rules, the last receipt of the
-  project you are in and what is due. Each prompt brings the notes that touch it.
+  project you are in, your open projects and what is due. Each prompt brings the notes that touch it.
 - **Your files, in plain Markdown.** Notes, receipts and tasks live in one folder that you read and
   edit in [Obsidian](https://obsidian.md), the free notes app. They stay on your machine.
 - **It changes only on evidence.** A personality line needs the same thing seen on three different
@@ -130,7 +130,7 @@ the vault, and open the vault folder in [Obsidian](https://obsidian.md) (Open fo
 <summary>Updating to a new release</summary>
 
 Run the install again from the new release, without `--config`: it reuses the vault's own
-`.brain/config.json`.
+`.brain/config.json`. What each release changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ```sh
 python3 install.py --vault "/path/to/vault"        # macOS / Linux

@@ -38,7 +38,8 @@ BLOCK = re.compile(r'(?ms)^## Pattern: ([^\r\n]+)\r?\n(.*?)(?=^## Pattern: |\Z)'
 MARK = re.compile(r'<!-- neomyelin:([0-9a-f]{12}) -->')
 EMPTY = '# Evidence patterns\n\nOnly verified receipt quotes are stored here.\n'
 EVIDENCE = re.compile(r'^- (\d{4}-\d{2}-\d{2}) `([^`]+)` "([^"]+)"$')
-SCAN = re.compile(r'(?m)^Last scan: (\d{4}-\d{2}-\d{2})$')
+# The whole line with its ending: `$` alone stops before `\n`, so a CRLF line never matched.
+SCAN = re.compile(r'(?m)^Last scan: (\d{4}-\d{2}-\d{2})\r?(?:\n|\Z)')
 
 
 def key(text: str) -> str:
@@ -86,25 +87,44 @@ def entries(text: str) -> list[dict]:
     return output
 
 
-def last_scan(text: str) -> dt.date | None:
-    found = SCAN.search(text)
-    if not found:
-        return None
+def line_ending(text: str) -> str:
+    """The ledger's own line ending, which every writer uses: CRLF when most lines end so."""
+    crlf = text.count('\r\n')
+    return '\r\n' if crlf > text.count('\n') - crlf else '\n'
+
+
+def _scan_day(found: re.Match) -> dt.date | None:
     try:
         return dt.date.fromisoformat(found.group(1))
     except ValueError:
         return None
 
 
+def last_scan(text: str) -> dt.date | None:
+    """The newest `Last scan` date. A ledger can hold two lines: an older version could not read a
+    CRLF one and inserted a second."""
+    return max(filter(None, map(_scan_day, SCAN.finditer(text))), default=None)
+
+
 def advance_scan(text: str, through: dt.date) -> str:
-    prior = last_scan(text)
-    if prior and prior >= through:
+    """Set the `Last scan` line to the newer of its date and `through`, in the ledger's own line
+    ending; duplicate lines fold into the first one, which keeps the newest date."""
+    ending = line_ending(text)
+    found = list(SCAN.finditer(text))
+    if not found:
+        line = f'Last scan: {through.isoformat()}'
+        first = text.find('\n')
+        return text[:first + 1] + line + ending + text[first + 1:] if first >= 0 else text + ending + line + ending
+    newest = max([day for day in map(_scan_day, found) if day] + [through])
+    if len(found) == 1 and found[0].group(1) == newest.isoformat():
         return text
-    line = f'Last scan: {through.isoformat()}'
-    if SCAN.search(text):
-        return SCAN.sub(line, text, count=1)
-    first = text.find('\n')
-    return text[:first + 1] + line + '\n' + text[first + 1:] if first >= 0 else text + '\n' + line + '\n'
+    pieces, position = [], 0
+    for index, match in enumerate(found):
+        pieces.append(text[position:match.start()])
+        if index == 0:
+            pieces.append(f'Last scan: {newest.isoformat()}' + (ending if match.group(0).endswith('\n') else ''))
+        position = match.end()
+    return ''.join(pieces) + text[position:]
 
 
 def observations(vault: Path, ledger: str, finished: dt.date,
@@ -210,7 +230,7 @@ def candidate(raw: object, sources: dict[str, list[dict]]) -> dict | None:
             'evidence': sorted(valid, key=lambda item: (item['day'], item['ref']))}
 
 
-def block(item: dict, *, today: dt.date | None = None) -> str:
+def block(item: dict, *, today: dt.date | None = None, ending: str = '\n') -> str:
     today = today or dt.date.today()
     lines = [f"## Pattern: {item['title']}", 'Status: active',
              f"ID: {identifier(item['title'])}",
@@ -222,7 +242,7 @@ def block(item: dict, *, today: dt.date | None = None) -> str:
     lines.extend(f"- {proof['day']} `{proof['ref']}` \"{proof['quote']}\""
                  for proof in item['evidence'])
     lines.append('Counter evidence:')
-    return '\n'.join(lines) + '\n'
+    return ending.join(lines) + ending
 
 
 def _read(path: Path, fallback: str = '') -> str:
@@ -244,6 +264,7 @@ def add_evidence(text: str, item: dict, proofs: list[dict]) -> tuple[str, bool]:
     if not additions:
         return text, False
     raw = item['block']
+    ending = line_ending(text)
     heading = re.search(r'(?m)^Evidence:[ \t]*\r?\n', raw)
     if not heading:
         return text, False
@@ -252,18 +273,18 @@ def add_evidence(text: str, item: dict, proofs: list[dict]) -> tuple[str, bool]:
     if following:
         position += following.start()
     else:
-        position = len(raw.rstrip('\n'))
-    lines = ''.join(f"- {proof['day']} `{proof['ref']}` \"{proof['quote']}\"\n"
+        position = len(raw.rstrip('\r\n'))
+    lines = ''.join(f"- {proof['day']} `{proof['ref']}` \"{proof['quote']}\"{ending}"
                     for proof in additions)
     if position and raw[position - 1] != '\n':
-        lines = '\n' + lines
+        lines = ending + lines
     changed = raw[:position] + lines + raw[position:]
     updated_fingerprint = fingerprint(item['title'], item['evidence'] + additions)
-    changed = re.sub(r'(?m)^Fingerprint: [0-9a-f]{12}$',
+    changed = re.sub(r'(?m)^Fingerprint: [0-9a-f]{12}(?=\r?$)',
                      f'Fingerprint: {updated_fingerprint}', changed, count=1)
     if item['status'] == 'candidate' and len({p['day'] for p in item['evidence'] + additions}) >= THRESHOLD:
         changed = changed.replace('Status: candidate', 'Status: active', 1)
-        changed = changed.replace('Area:', f"Binding date: {dt.date.today().isoformat()}\nArea:", 1)
+        changed = changed.replace('Area:', f"Binding date: {dt.date.today().isoformat()}{ending}Area:", 1)
     return _replace_block(text, item, changed), True
 
 
@@ -276,11 +297,12 @@ def add_counter_evidence(text: str, item: dict, proofs: list[dict]) -> tuple[str
     additions = [proof for proof in proofs if (proof['day'], proof['ref']) not in present]
     if not additions:
         return text, False
+    ending = line_ending(text)
     if 'Counter evidence:' not in raw:
-        raw = raw.rstrip('\n') + '\nCounter evidence:\n'
-    lines = ''.join(f"- {proof['day']} `{proof['ref']}` \"{proof['quote']}\"\n"
+        raw = raw.rstrip('\r\n') + ending + 'Counter evidence:' + ending
+    lines = ''.join(f"- {proof['day']} `{proof['ref']}` \"{proof['quote']}\"{ending}"
                     for proof in additions)
-    return _replace_block(text, item, raw.rstrip('\n') + '\n' + lines), True
+    return _replace_block(text, item, raw.rstrip('\r\n') + ending + lines), True
 
 
 def _line(item: dict) -> str:
@@ -453,9 +475,10 @@ def run(cfg: dict | None = None, *, dry_run: bool = False,
                     continue
                 known_titles.add(title)
                 known_behaviors.add(key(item['behavior']))
-                additions.append(block(item, today=today))
+                additions.append(block(item, today=today, ending=line_ending(current)))
             if additions:
-                current = current.rstrip('\r\n') + '\n\n' + '\n\n'.join(additions)
+                ending = line_ending(current)
+                current = current.rstrip('\r\n') + ending * 2 + (ending * 2).join(additions)
             current, sleeping, waking = rank(current, int(cfg.get('pattern_budget', DEFAULT_BUDGET)))
             if not rejected:
                 current = advance_scan(current, finished)
@@ -494,10 +517,11 @@ def veto(title: str, cfg: dict | None = None, *, reason: str = '',
             return 0
         clean_reason = ' '.join(reason.split()) or 'no reason supplied'
         record = f"- {(today or dt.date.today()).isoformat()} {who} veto: {clean_reason}"
+        ending = line_ending(current)
         changed = wanted['block'].replace(f"Status: {wanted['status']}", 'Status: vetoed', 1)
         if 'Counter evidence:' not in changed:
-            changed = changed.rstrip('\n') + '\nCounter evidence:\n'
-        changed = changed.rstrip('\n') + '\n' + record + '\n'
+            changed = changed.rstrip('\r\n') + ending + 'Counter evidence:' + ending
+        changed = changed.rstrip('\r\n') + ending + record + ending
         updated = _replace_block(current, wanted, changed)
         personality = personality_text(_read(personality_path), updated)
         _write_pair(evidence_path, personality_path, current, updated, personality)
