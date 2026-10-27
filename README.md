@@ -90,7 +90,7 @@ the one trust step your client needs.
   status line asks it too, at most every five minutes), `codex app-server` for Codex's reset
   credits, and `agy -p /usage`, which asks Antigravity's servers for your quota without a model
   turn; and once a day at most, a background check asks GitHub which NeoMyelin release is the
-  latest, so the assistant can tell you once when a new one is out (`"update_notice": false` in
+  latest, so the session can tell you when a new one is out (`"update_notice": false` in
   `.brain/config.json` or `NEOMYELIN_UPDATE_NOTICE=off` turns it off).
 
 ## Requirements and status

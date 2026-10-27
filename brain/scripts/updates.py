@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Tell the user once when a newer NeoMyelin release is out.
+"""Tell the user, once a day until they update, when a newer NeoMyelin release is out.
 
 Session start (memory_context.py) calls `session_notice`, which reads files in the vault and never
-the network. It returns one `[Memory: Update]` line when all of these hold:
+the network. It returns one `[Memory: Update]` line for the model and one short message the
+harness shows the user itself (`systemMessage`), so the notice never rests on the model repeating
+it, when all of these hold:
 
 - the notice is on: `update_notice` in the config is not false, and config.UPDATE_NOTICE_ENV is
   not off;
@@ -10,8 +12,9 @@ the network. It returns one `[Memory: Update]` line when all of these hold:
   A copy without one records none, and an unknown version is never "outdated";
 - the cached latest release (`.brain/.state/update-check.json`) is newer, compared as numbers
   x.y.z, and fresh: the last check worked and was made within FRESH;
-- this vault was not told about that version yet: `.brain/.state/update-notices/<version>` is
-  created exclusively, so of two sessions starting together only one shows it.
+- this vault was not told about that version today: `.brain/.state/update-notices/<version>.<day>`
+  is created exclusively, so of two sessions starting together only one shows it. The notice
+  comes back each day until the vault runs that version or a newer one.
 
 When a check is due, session start starts `updates.py --check` detached (no console window,
 NEOMYELIN_INVOKED_BY set) and returns at once. That process makes one request to GitHub's
@@ -56,7 +59,7 @@ GUIDE = f'https://raw.githubusercontent.com/{config.RELEASE_REPO}/main/INSTALL.m
 VERSION_FILE = 'VERSION'           # in .brain/, written by install.py
 CACHE = 'update-check.json'        # in .brain/.state/, written only by the check
 CLAIM = 'update-check.claim'       # in .brain/.state/, while a check runs
-NOTICES = 'update-notices'         # in .brain/.state/, one file per version announced
+NOTICES = 'update-notices'         # in .brain/.state/, `<version>.<day>` of the last day told
 INVOKED_ENV = 'NEOMYELIN_INVOKED_BY'  # memory_context.INVOKED_ENV: the layer's own processes
 OFF = {'off', '0', 'false', 'no'}
 
@@ -164,27 +167,38 @@ def newer(cache: dict, installed: str, now: float) -> dict | None:
     return latest
 
 
-def first_time(vault: Path, version: str) -> bool:
-    """True once per version per vault. The marker is created exclusively, so of two sessions
-    starting together one gets True; a marker that cannot be written means no line, never a
-    notice on every session."""
+def first_today(vault: Path, version: str, now: float) -> bool:
+    """True once per version per local day per vault. The marker is created exclusively, so of two
+    sessions starting together one gets True; a marker that cannot be written means no notice,
+    never one on every session. The markers of earlier days go once today's is written."""
     folder = state_dir(vault) / NOTICES
+    marker = f'{version}.{dt.datetime.fromtimestamp(now).date().isoformat()}'
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        with (folder / version).open('x', encoding='utf-8', newline='\n') as handle:
+        with (folder / marker).open('x', encoding='utf-8', newline='\n') as handle:
             handle.write(dt.datetime.now().astimezone().isoformat(timespec='seconds') + '\n')
     except OSError:
         return False
+    for old in folder.iterdir():
+        if old.name != marker:
+            try:
+                old.unlink()
+            except OSError:
+                pass
     return True
 
 
 def notice_line(vault: Path, installed: str, latest: dict) -> str:
     launcher = 'py -3' if os.name == 'nt' else 'python3'
     return (f"[Memory: Update] NeoMyelin {latest['version']} is out; this vault runs {installed}. "
-            'In your first reply, tell the user so in one or two plain sentences: the release notes '
-            f"are at {latest['url']}, and to update they can ask you. You then follow the Updating "
-            f'section of {GUIDE} (download the release, run `{launcher} install.py --vault "{vault}"` '
-            'from its folder). This notice is shown once.')
+            f"The user is shown this once a day until they update; the release notes are at "
+            f"{latest['url']}. When they ask you to update, follow the Updating section of {GUIDE} "
+            f'(download the release, run `{launcher} install.py --vault "{vault}"` from its folder).')
+
+
+def user_message(installed: str, latest: dict) -> str:
+    return (f"NeoMyelin {latest['version']} is out (you have {installed}). "
+            f"What's new: {latest['url']} - ask your assistant to update.")
 
 
 def claim(vault: Path) -> bool:
@@ -236,19 +250,21 @@ def start_check(vault: Path) -> None:
                      start_new_session=os.name != 'nt')
 
 
-def session_notice(cfg: dict, now: float | None = None, start: bool = True) -> str:
-    """The `[Memory: Update]` line, or ''. Starts the detached check when one is due, unless
-    start is False or this process was started by the layer itself. Files only, never the network."""
+def session_notice(cfg: dict, now: float | None = None, start: bool = True) -> tuple[str, str]:
+    """(the `[Memory: Update]` line, the message shown to the user), or ('', ''). Starts the
+    detached check when one is due, unless start is False or this process was started by the
+    layer itself. Files only, never the network."""
     if not enabled(cfg):
-        return ''
+        return '', ''
     vault = config.vault_path(cfg)
     installed = installed_version(vault)
     if installed is None:
-        return ''
+        return '', ''
     now = time.time() if now is None else now
     cache = read_cache(vault)
     latest = newer(cache, installed, now)
-    text = notice_line(vault, installed, latest) if latest and first_time(vault, latest['version']) else ''
+    text = (('', '') if not (latest and first_today(vault, latest['version'], now))
+            else (notice_line(vault, installed, latest), user_message(installed, latest)))
     if start and not os.environ.get(INVOKED_ENV) and due(cache, now) and claim(vault):
         # Another session's check may have finished between the read above and the claim.
         if due(read_cache(vault), now):

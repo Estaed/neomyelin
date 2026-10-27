@@ -67,6 +67,29 @@ class SessionStartTests(unittest.TestCase):
         self.assertNotIn('title:', context)  # frontmatter stripped
         self.assertNotIn('[Memory: Check]', context)
 
+    def test_identity_names_the_recorded_version_or_says_none_is_recorded(self):
+        def identity() -> str:
+            return context_of(self.cfg, self.project).split('\n', 1)[0]
+
+        self.assertTrue(identity().endswith(
+            'NeoMyelin version: not recorded (installed before 1.2.0 or from a clone).'), identity())
+        write(self.vault / '.brain' / 'VERSION', '1.3.0\n')
+        self.assertTrue(identity().startswith('[Memory: Identity]'))
+        self.assertTrue(identity().endswith(f'Memory vault: {self.vault.as_posix()}. NeoMyelin version: 1.3.0.'),
+                        identity())
+        write(self.vault / '.brain' / 'VERSION', 'v1.3\n')
+        self.assertTrue(identity().endswith(
+            'NeoMyelin version: unreadable (.brain/VERSION does not hold x.y.z).'), identity())
+
+    def test_an_unreadable_version_says_unknown_and_warns(self):
+        import updates  # noqa: PLC0415 - memory_context imports it the same lazy way
+        write(self.vault / '.brain' / 'VERSION', '1.3.0\n')  # present, so the reader is reached
+        with mock.patch.object(updates, 'installed_version', side_effect=RuntimeError('boom')):
+            context = context_of(self.cfg, self.project)
+        self.assertTrue(context.split('\n', 1)[0].endswith('NeoMyelin version: unknown.'))
+        self.assertIn('[Memory warning] _version failed: RuntimeError: boom', context)
+        self.assertIn('[Memory: Rules]', context)
+
     def test_inside_vault_prints_rules_and_core_too(self):
         context = context_of(self.cfg, self.vault)
         self.assertEqual(section(context, '[Memory: Rules]'), '# Rules\n\nAlways cite the source.')

@@ -209,8 +209,10 @@ NeoMyelin's own files and entries change.
 **How the user hears of a new release.** The installer records the release's version in
 `.brain/VERSION`. At most once a day a session start asks GitHub, in the background, for the
 latest NeoMyelin release and keeps only its version number and page; the session never waits for
-it. When that release is newer, the assistant's first reply in a following session says so once,
-with the link to its release notes and this section. An install from a copy without a `VERSION`
+it. When that release is newer, a following session starts with a short notice naming it and the
+link to its release notes, once a day until the vault is updated: Claude Code and Codex show it
+themselves, under agy the assistant's first reply says it. Asked to update, the assistant follows
+this section. An install from a copy without a `VERSION`
 file (a clone of the development repository) records no version and never shows the notice.
 
 To turn the notice off, add `"update_notice": false` to the vault's `.brain/config.json`, or set

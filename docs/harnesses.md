@@ -174,9 +174,13 @@ for a snap with one line saying so, and still writes the instruction block into 
 - **Update notice** (`updates.py`, from the same session start): never on the network itself. It
   reads `.brain/.state/update-check.json` and, when GitHub's latest release is newer than
   `.brain/VERSION` (written by the installer from the release's `VERSION`), adds one
-  `[Memory: Update]` line once per version; when a check is due (a day, or 1 h / 6 h / a day after
-  failures) it detaches a short check of the latest-release API. So a release shows from the
-  session after the one that found it. Off with `update_notice: false` or `NEOMYELIN_UPDATE_NOTICE=off`.
+  `[Memory: Update]` line for the model and a short `systemMessage` that Claude Code and Codex
+  show the user themselves (Claude Code 2.1.311 records it as a `hook_system_message`; Codex's
+  docs say it is surfaced as a warning, not measured here; agy has no such field, so
+  `agy_hook.py` asks the model to say it), at
+  most once a day until the vault runs that version; when a check is due (a day, or 1 h / 6 h /
+  a day after failures) it detaches a short check of the latest-release API. So a release shows
+  from the session after the one that found it. Off with `update_notice: false` or `NEOMYELIN_UPDATE_NOTICE=off`.
 - **Child sessions:** `NEOMYELIN_INVOKED_BY` in the environment of a model CLI the layer starts
   (`engine.ask`: `claude -p`, `codex exec` or `agy -p`) keeps that session from loading memory or
   starting another nightly run.
@@ -193,6 +197,7 @@ frontmatter between `---` lines, UTF-8 with LF line endings. The hooks read thes
 | `history <tasks/<id>.md or id>` | nothing | `[{sequence, event_type, record_id, revision, source, at, record}]` from `.brain/.state/engine/history/<id>.jsonl`, plus the file as it is now when it changed after the last entry |
 | `sync` | `daily/<local day>.md` | `{"generated": true, "kind": "receipt-index"}`, `# Daily: <day>`, `### HH:MM — [Project] title · Local PC` (or `· Manual`), the body, `[[receipts/<file>\|receipt]]`; a daily note without `"generated": true` is never overwritten |
 | `doctor` | nothing | `{status, receipts, tasks, problems}`; `.brain/scripts/doctor.py` shows it as its Engine row |
+| `version` | nothing | `{"version": "x.y.z"}` from `.brain/VERSION`, or `{"version": null, "why"}`; the session's `[Memory: Identity]` line carries the same value |
 
 Recall indexes `receipts/` directly and never `daily/` (generated views of the same receipts);
 any file whose frontmatter has `"generated": true` is skipped.

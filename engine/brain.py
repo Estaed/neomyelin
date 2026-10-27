@@ -7,6 +7,7 @@
     python brain.py history <tasks/<id>.md or id>
     python brain.py sync
     python brain.py doctor
+    python brain.py version
 
 install.py puts this file at the vault root; it works on the folder it sits in. Each command
 prints one JSON result on stdout and exits 0; a refused or failed command prints
@@ -30,6 +31,8 @@ then the body, UTF-8 with LF line endings.
   not a generated view is never overwritten.
 - doctor: the engine's self-check (unreadable receipts and tasks, duplicate task ids, daily
   views out of date); .brain/scripts/doctor.py reports it.
+- version: {"version": "x.y.z"} as install.py recorded it in .brain/VERSION, or
+  {"version": null, "why"} for a vault installed before 1.2.0 or from a clone.
 
 The file formats follow Avenox V3's, which this engine replaces; the code is NeoMyelin's own.
 """
@@ -568,7 +571,23 @@ def parser() -> argparse.ArgumentParser:
     log.add_argument('task', help='tasks/<id>.md or the task id')
     commands.add_parser('sync', help='Rebuild the daily view from the receipts')
     commands.add_parser('doctor', help="The engine's self-check")
+    commands.add_parser('version', help='The NeoMyelin release this vault runs (.brain/VERSION)')
     return root
+
+
+def version(vault: Path) -> dict:
+    """The x.y.z install.py recorded from the release, or null with the reason."""
+    path = vault / '.brain' / 'VERSION'
+    try:
+        text = path.read_text(encoding='utf-8-sig').strip()
+    except FileNotFoundError:
+        return {'version': None, 'why': 'no .brain/VERSION: installed before 1.2.0 or from a clone; '
+                                        'install the latest release to record one'}
+    except (OSError, UnicodeError) as exc:
+        return {'version': None, 'why': f'.brain/VERSION unreadable: {type(exc).__name__}'}
+    if not re.fullmatch(r'\d{1,9}\.\d{1,9}\.\d{1,9}', text, re.ASCII):
+        return {'version': None, 'why': f'.brain/VERSION does not hold x.y.z: {text[:40]!r}'}
+    return {'version': text}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -591,6 +610,8 @@ def main(argv: list[str] | None = None) -> int:
             result = history(VAULT, args.task)
         elif args.command == 'sync':
             result = sync(VAULT)
+        elif args.command == 'version':
+            result = version(VAULT)
         else:
             result = doctor(VAULT)
     except (OSError, UnicodeError, ValueError) as exc:

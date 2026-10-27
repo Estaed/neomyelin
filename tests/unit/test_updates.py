@@ -90,7 +90,13 @@ class Base(unittest.TestCase):
         return value
 
     def notice(self, now: float = NOW, start: bool = False) -> str:
-        return updates.session_notice(self.cfg, now=now, start=start)
+        """The model's line; the user's message comes with it or not at all."""
+        line, message = updates.session_notice(self.cfg, now=now, start=start)
+        self.assertEqual(bool(line), bool(message), (line, message))
+        return line
+
+    def markers(self) -> list[str]:
+        return sorted(path.name for path in (self.state / updates.NOTICES).iterdir())
 
     def checks_started(self) -> list[list[str]]:
         return [call.args[0] for call in self.popen.call_args_list if '--check' in call.args[0]]
@@ -118,37 +124,74 @@ class VersionTests(Base):
         self.assertIn(f'{updates.PAGE}v1.10.0', line)
         self.assertIn(updates.GUIDE, line)
         self.assertIn(f'install.py --vault "{self.vault}"', line)
-        self.assertIn('In your first reply', line)
+        self.assertNotIn('In your first reply', line)  # the user hears it from the harness, not the model
         self.assertNotIn('\n', line)
+
+    def test_the_user_message_names_both_versions_and_the_release_page(self):
+        self.install('1.9.9')
+        self.checked('1.10.0')
+        line, message = updates.session_notice(self.cfg, now=NOW, start=False)
+        self.assertIn('NeoMyelin 1.10.0 is out', line)
+        self.assertEqual(message, updates.user_message('1.9.9', latest('1.10.0')))
+        for part in ('1.10.0', '1.9.9', f'{updates.PAGE}v1.10.0'):
+            self.assertIn(part, message)
+        self.assertNotIn('\n', message)
 
     def test_no_recorded_version_means_no_line_and_no_check(self):
         self.checked('9.9.9')
-        self.assertEqual(self.notice(start=True), '')
+        self.assertEqual(updates.session_notice(self.cfg, now=NOW, start=True), ('', ''))
         self.assertEqual(self.checks_started(), [])
 
 
-class OnceTests(Base):
-    def test_once_per_version_per_vault(self):
+class DailyTests(Base):
+    """Once per local day per vault, every day until the vault runs the latest version.
+    NOW is 08:00 UTC, so NOW and NOW + HOUR share a local date in every time zone."""
+
+    def setUp(self):
+        super().setUp()
         self.install('1.2.0')
         self.checked('1.2.1')
+
+    def test_once_a_day_until_updated(self):
         self.assertIn('NeoMyelin 1.2.1 is out', self.notice())
         self.assertEqual(self.notice(), '')
+        self.assertEqual(self.notice(now=NOW + HOUR), '')
+        self.assertIn('NeoMyelin 1.2.1 is out', self.notice(now=NOW + DAY))
+        self.assertEqual(self.notice(now=NOW + DAY + HOUR), '')
+        self.install('1.2.1')
+        self.assertEqual(self.notice(now=NOW + 2 * DAY), '')
+        self.install('1.3.0')
         self.assertEqual(self.notice(now=NOW + 3 * DAY), '')
-        self.checked('1.2.2', at=NOW + 3 * DAY)
-        self.assertIn('NeoMyelin 1.2.2 is out', self.notice(now=NOW + 3 * DAY + 60))
-        self.assertEqual(self.notice(now=NOW + 3 * DAY + 120), '')
+
+    def test_two_vaults_are_told_separately(self):
+        self.assertIn('NeoMyelin 1.2.1 is out', self.notice())
         other, cfg = make_vault(Path(self.tmp.name) / 'other')
         write(other / '.brain' / updates.VERSION_FILE, '1.2.0\n')
-        write(other / '.brain' / '.state' / updates.CACHE, json.dumps(json.loads(
-            (self.state / updates.CACHE).read_text(encoding='utf-8'))))
-        self.assertIn('NeoMyelin 1.2.2 is out', updates.session_notice(cfg, now=NOW + 3 * DAY + 60, start=False))
+        write(other / '.brain' / '.state' / updates.CACHE, (self.state / updates.CACHE).read_text(encoding='utf-8'))
+        line, message = updates.session_notice(cfg, now=NOW, start=False)
+        self.assertIn('NeoMyelin 1.2.1 is out', line)
+        self.assertTrue(message)
+        self.assertEqual(updates.session_notice(cfg, now=NOW, start=False), ('', ''))
+        self.assertEqual(self.notice(), '')
 
     def test_a_notice_that_cannot_be_marked_is_not_shown(self):
-        self.install('1.2.0')
-        self.checked('1.2.1')
         write(self.state / updates.NOTICES, 'a file where the folder goes\n')
         self.assertEqual(self.notice(), '')
         self.assertEqual(self.notice(), '')
+        self.assertEqual(self.notice(now=NOW + DAY), '')
+
+    def test_a_new_days_marker_prunes_the_old_ones(self):
+        folder = self.state / updates.NOTICES
+        for name in ('1.2.1', '1.2.0.2020-01-01', '1.2.1.2020-01-02'):  # '1.2.1': v1.3.0's once-per-version marker
+            write(folder / name, '2020-01-01T00:00:00+00:00\n')
+        self.assertIn('NeoMyelin 1.2.1 is out', self.notice())
+        today = self.markers()
+        self.assertEqual(len(today), 1, today)
+        self.assertTrue(today[0].startswith('1.2.1.'), today)
+        self.assertIn('NeoMyelin 1.2.1 is out', self.notice(now=NOW + DAY))
+        tomorrow = self.markers()
+        self.assertEqual(len(tomorrow), 1, tomorrow)
+        self.assertNotEqual(tomorrow, today)
 
 
 class ScheduleTests(Base):
@@ -464,19 +507,31 @@ class AnswerTests(Base):
 
 
 class SessionStartTests(Base):
-    def context(self, warm: bool = True) -> str:
+    def hook(self, warm: bool = True) -> dict:
         output = memory_context.session_start_context(json.dumps({'cwd': str(self.vault)}), cfg=self.cfg,
                                                       emit=False, warm=warm)
-        return json.loads(output)['hookSpecificOutput']['additionalContext']
+        return json.loads(output)
+
+    def context(self, warm: bool = True) -> str:
+        return self.hook(warm)['hookSpecificOutput']['additionalContext']
 
     def test_session_start_reads_the_cache_and_never_the_network(self):
         self.install('1.2.0')
         self.checked('1.2.1', at=time.time() - 2 * DAY)  # newer, fresh, and a check is due
-        context = self.context()
-        self.assertIn('\n\n[Memory: Update] NeoMyelin 1.2.1 is out; this vault runs 1.2.0.', context)
+        hook = self.hook()
+        self.assertIn('\n\n[Memory: Update] NeoMyelin 1.2.1 is out; this vault runs 1.2.0.',
+                      hook['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(hook['systemMessage'], updates.user_message('1.2.0', latest('1.2.1')))
         self.network.assert_not_called()
         self.assertEqual(len(self.checks_started()), 1)
-        self.assertNotIn('[Memory: Update]', self.context())
+        again = self.hook()  # a second session the same day
+        self.assertNotIn('[Memory: Update]', again['hookSpecificOutput']['additionalContext'])
+        self.assertNotIn('systemMessage', again)
+
+    def test_nothing_newer_means_no_system_message(self):
+        self.install('1.2.1')
+        self.checked('1.2.1', at=time.time() - HOUR)
+        self.assertNotIn('systemMessage', self.hook())
 
     def test_an_odd_cache_costs_no_line_and_no_warning(self):
         self.install('1.2.0')
@@ -490,9 +545,11 @@ class SessionStartTests(Base):
 
     def test_a_broken_update_module_costs_only_its_line(self):
         with mock.patch.object(updates, 'session_notice', side_effect=RuntimeError('boom')):
-            context = self.context(warm=False)
+            hook = self.hook(warm=False)
+        context = hook['hookSpecificOutput']['additionalContext']
         self.assertIn('[Memory: Rules]', context)
-        self.assertIn('[Memory warning] _update_line failed: RuntimeError: boom', context)
+        self.assertIn('[Memory warning] _update_notice failed: RuntimeError: boom', context)
+        self.assertNotIn('systemMessage', hook)
 
 
 class WorkerTests(Base):

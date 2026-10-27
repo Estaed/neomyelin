@@ -39,7 +39,10 @@ def session_context(payload: dict) -> str:
     try:
         import memory_context
         hook = json.loads(memory_context.session_start_context(hook_input(payload), emit=False))
-        return hook['hookSpecificOutput']['additionalContext']
+        context = hook['hookSpecificOutput']['additionalContext']
+        # agy has no verified way to show the user text itself, so the model passes it on.
+        message = hook.get('systemMessage')
+        return f'{context}\n\n[Memory: Notice] In your first reply, tell the user: {message}' if message else context
     except Exception as exc:  # noqa: BLE001 - a broken hook must say so in the session, not vanish
         return f'[Memory warning] NeoMyelin session context failed: {type(exc).__name__}: {exc}'
 

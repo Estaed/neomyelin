@@ -5,9 +5,10 @@ Registered as a SessionStart hook (render_hooks.py). The vault and the names com
 config.py; the hook prints one JSON object whose `additionalContext` the harness adds to
 the new session:
 
-    [Memory: Identity]      who the assistant is, for whom, in which language
-    [Memory: Update]        a newer NeoMyelin release, once per version (updates.py: the cache
-                            only; a due check runs detached and never holds the session up)
+    [Memory: Identity]      who the assistant is, for whom, in which language; the NeoMyelin version
+    [Memory: Update]        a newer NeoMyelin release, once a day until updated, also shown to the
+                            user as `systemMessage` (updates.py: the cache only; a due check runs
+                            detached and never holds the session up)
     [Memory: Session]       the receipt `session` value the receipt reminder (receipt_gate.py) matches
     [Memory: Rules]         <companion>/Rules.md, whole
     [Memory: Core]          <companion>/Core.md, whole
@@ -836,20 +837,36 @@ def _start_nightly(cfg: dict, warnings: list[str]) -> None:
         warnings.append(f'[Memory warning] nightly run did not start: {exc}')
 
 
-def _update_line(cfg: dict, start: bool) -> str:
-    """`[Memory: Update]` when a newer release is cached and not yet told; starts the detached
-    check when one is due (updates.py). Reads vault files only, never the network."""
+def _update_notice(cfg: dict, start: bool) -> tuple[str, str]:
+    """(`[Memory: Update]`, the user's message) when a newer release is cached and not told
+    today; starts the detached check when one is due (updates.py). Reads vault files only, never
+    the network."""
     import updates  # noqa: PLC0415 - a layout without it costs this line only
     return updates.session_notice(cfg, start=start)
 
 
-def _identity(cfg: dict, vault: Path) -> str:
+def _version(vault: Path) -> str:
+    import updates  # noqa: PLC0415 - a layout without it costs this line only
+    if not updates.version_path(vault).exists():
+        return 'not recorded (installed before 1.2.0 or from a clone)'
+    return updates.installed_version(vault) or 'unreadable (.brain/VERSION does not hold x.y.z)'
+
+
+def _identity(cfg: dict, vault: Path, warnings: list[str]) -> str:
+    """Who the assistant is, and the NeoMyelin release this vault runs, so "which version?" has
+    an answer (.brain/VERSION, written by install.py)."""
+    version = _quiet('unknown', warnings, _version, vault)
     return (f"[Memory: Identity] You are {cfg['assistant_name']}, {cfg['user_name']}'s assistant. "
-            f"Speak and write vault notes in {cfg['language']}. Memory vault: {vault.as_posix()}")
+            f"Speak and write vault notes in {cfg['language']}. Memory vault: {vault.as_posix()}. "
+            f'NeoMyelin version: {version}.')
 
 
-def _emit(context: str) -> str:
+def _emit(context: str, message: str = '') -> str:
+    """The hook's JSON. `message` goes to `systemMessage`, which Claude Code and Codex show the
+    user themselves; the context reaches only the model."""
     payload = {'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': context}}
+    if message:
+        payload['systemMessage'] = message
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -910,8 +927,8 @@ def session_start_context(hook_input: str, *, cfg: dict | None = None, emit: boo
                 + PROJECTS_HINT.format(user=cfg['user_name'], folder=config.PROJECTS)}
     values = {key: _clip(value, CAPS[key], _more(sources[key])) if key in CAPS else value
               for key, value in raw.items()}
-    update_line = _quiet('', warnings, _update_line, cfg, warm)
-    head = ([_identity(cfg, vault)] + ([check_line] if check_line else [])
+    update_line, update_message = _quiet(('', ''), warnings, _update_notice, cfg, warm)
+    head = ([_identity(cfg, vault, warnings)] + ([check_line] if check_line else [])
             + ([update_line] if update_line else []))
 
     if warm:
@@ -957,7 +974,7 @@ def session_start_context(hook_input: str, *, cfg: dict | None = None, emit: boo
             f'[Memory warning] The session context did not fit in {TOTAL_CAP} bytes: '
             f'{FILES["rules"]} is over budget; shorten it.'] + ([session_line] if session_line else []))
 
-    output = _emit(context)
+    output = _emit(context, update_message)
     if emit:
         sys.stdout.write(output + '\n')
         sys.stdout.flush()

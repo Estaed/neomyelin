@@ -6,14 +6,16 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest import mock
 
-from helpers import make_vault, write_config
+from helpers import make_vault, write, write_config
 
 import agy_hook
 import config
 import memory_context
+import updates
 
 
 class AgyHookTests(unittest.TestCase):
@@ -42,6 +44,27 @@ class AgyHookTests(unittest.TestCase):
         self.assertIn("[Memory: Identity] You are Nova, Alex's assistant.", text)
         self.assertIn('[Memory: Rules]\n# Rules\n\nAlways cite the source.', text)  # inside the vault too
         self.assertIn(hashlib.sha256(b'conv-1').hexdigest()[:24], text)
+
+    def test_a_due_update_notice_reaches_the_user_through_the_model(self):
+        """agy shows the user nothing itself, so the hook's systemMessage becomes a line the
+        model passes on; the next session the same day has none."""
+        write(self.vault / '.brain' / updates.VERSION_FILE, '1.2.0\n')
+        now = time.time()  # fresh and not due: no check process starts
+        write(self.vault / '.brain' / '.state' / updates.CACHE, json.dumps({
+            'schema': 1, 'attempted_at': now - 60, 'next_check_at': now + updates.DAY, 'failures': 0,
+            'checked_at': now - 60, 'latest': {'version': '1.2.1', 'url': f'{updates.PAGE}v1.2.1'}}))
+        message = updates.user_message('1.2.0', {'version': '1.2.1', 'url': f'{updates.PAGE}v1.2.1'})
+        raw = json.dumps({'invocationNum': 0, 'conversationId': 'conv-1', 'cwd': str(self.vault)})
+        with mock.patch.dict(os.environ, {}), mock.patch.object(updates, 'start_check') as start:
+            for name in (config.UPDATE_NOTICE_ENV, updates.INVOKED_ENV):
+                os.environ.pop(name, None)
+            first = json.loads(agy_hook.respond(raw))['injectSteps'][0]['ephemeralMessage']
+            second = json.loads(agy_hook.respond(raw))['injectSteps'][0]['ephemeralMessage']
+        start.assert_not_called()
+        self.assertIn('[Memory: Update] NeoMyelin 1.2.1 is out', first)
+        self.assertIn(f'\n\n[Memory: Notice] In your first reply, tell the user: {message}', first)
+        self.assertNotIn('[Memory: Notice]', second)
+        self.assertIn('[Memory: Rules]', second)
 
     def test_later_invocations_and_bad_input_print_an_empty_object(self):
         for raw in (json.dumps({'invocationNum': 1, 'conversationId': 'c'}), json.dumps({'conversationId': 'c'}),

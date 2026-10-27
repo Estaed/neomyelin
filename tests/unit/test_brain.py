@@ -199,6 +199,33 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(json.loads(bad.stderr)['error'], 'Refused')
             self.assertEqual(json.loads(run('doctor').stdout)['receipts'], 1)
 
+    def test_version_answers_from_the_recorded_file_or_says_why_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            shutil.copyfile(ROOT / 'engine' / 'brain.py', vault / 'brain.py')
+            (vault / '.brain').mkdir()
+            record = vault / '.brain' / 'VERSION'
+
+            def answer() -> dict:
+                done = subprocess.run([sys.executable, str(vault / 'brain.py'), 'version'], cwd=vault,
+                                      capture_output=True, text=True, encoding='utf-8',
+                                      env={**os.environ, 'PYTHONUTF8': '1'}, timeout=60)
+                self.assertEqual((done.returncode, done.stderr), (0, ''))
+                return json.loads(done.stdout)
+
+            missing = answer()
+            self.assertIsNone(missing['version'])
+            self.assertIn('installed before 1.2.0 or from a clone', missing['why'])
+            record.write_bytes(b'\xef\xbb\xbf1.3.0\r\n')  # a BOM and CRLF, as an editor may leave it
+            self.assertEqual(answer(), {'version': '1.3.0'})
+            record.write_text('v1.3\n', encoding='utf-8')
+            malformed = answer()
+            self.assertIsNone(malformed['version'])
+            self.assertIn("'v1.3'", malformed['why'])
+            self.assertNotIn('installed before', malformed['why'])
+            record.write_text('1.3.0\n', encoding='utf-16')  # not UTF-8: an error, still exit 0
+            self.assertEqual(answer(), {'version': None, 'why': '.brain/VERSION unreadable: UnicodeDecodeError'})
+
 
 if __name__ == '__main__':
     unittest.main()

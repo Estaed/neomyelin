@@ -19,6 +19,20 @@ tested.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-27
+
+### Added
+
+- **Which version am I on:** `python brain.py version` prints the release your vault runs, and
+  every session starts knowing it, so you can simply ask your assistant. A vault installed before
+  1.2.0 says it has no recorded version; installing this release records one.
+
+### Fixed
+
+- **Update notice reaches you:** a newer release is now shown to you directly at session start
+  in Claude Code and Codex, instead of only to the assistant, which could leave it unsaid. It
+  comes back once a day until you update, rather than once and never again.
+
 ## [1.3.0] - 2026-10-26
 
 ### Added
