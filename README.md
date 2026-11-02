@@ -1,4 +1,4 @@
-# 🧠 NeoMyelin
+<h1><img src="docs/img/social-preview.jpg" alt="NeoMyelin: your AI assistant remembers where you stopped"></h1>
 
 [![Release](https://img.shields.io/github/v/release/Estaed/neomyelin)](https://github.com/Estaed/neomyelin/releases/latest)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
@@ -7,8 +7,6 @@
 
 **Your AI assistant remembers you between sessions, finds what you wrote, and changes only when
 your own behaviour shows it should.**
-
-![A demo vault: install, a session that starts knowing the project, recall on a prompt, a receipt, the health check](docs/img/demo.gif)
 
 Think of a colleague who keeps a notebook about your work. Each morning they reread who you are
 and where you stopped. When you ask something, they open the page that answers it. Each night
@@ -25,6 +23,13 @@ assistant you already use: Claude Code, Codex or Antigravity.
 It is my own second brain, shipped empty: the mechanisms and the folder structure of the system I
 use every day for school, work and life, with none of my data. Updates come from new NeoMyelin
 releases. MIT licensed.
+
+## See it run
+
+![A demo vault: install, a session that starts knowing the project, recall on a prompt, a receipt, the health check](docs/img/demo.gif)
+
+A demo vault, start to finish: the install, a session that already knows the project, recall on a
+prompt, a receipt, and the health check.
 
 ## Install: one folder, one message
 
@@ -43,7 +48,7 @@ the one trust step your client needs.
 
 ## How it works
 
-![The loop: session start, every prompt, work ends, nightly](docs/img/loop.gif)
+![Monday's session gets a note back on a prompt and writes a receipt into the vault; overnight a fix is proposed; Tuesday's session opens on Monday's receipt, the personality and the proposed fix](docs/img/how-it-works.jpg)
 
 1. **Session start:** a hook prints who you are, your rules, the assistant's personality, the last
    receipt of the project you are in and what is due. In any folder, not only the vault.
@@ -56,6 +61,13 @@ the one trust step your client needs.
    notes; praise or an objection of yours that no skill, rule or note took in comes back at the
    next session start. It needs no scheduler: it starts in the background at your first session
    after the time you chose, and a missed night is caught up by the next session.
+
+### How a personality line is earned
+
+![Three receipts from three different days quote the same habit; together they write one line into Personality.md, and a single command vetoes it](docs/img/evidence.jpg)
+
+Any line can be vetoed with `python .brain/scripts/patterns.py veto "<pattern title>"`; its evidence
+stays marked, so the same line is never proposed again. Your own lines in that file are never rewritten.
 
 <details>
 <summary>Everything it installs, feature by feature</summary>
@@ -75,6 +87,14 @@ the one trust step your client needs.
 
 </details>
 
+## Why not a CLAUDE.md alone?
+
+A `CLAUDE.md` or `AGENTS.md` is a page you write and keep up by hand, and each client reads its own.
+NeoMyelin keeps that page for you (its house rules reach every session in all three clients) and
+adds what a page cannot do: it writes down what was finished, brings back the notes that touch each
+prompt, turns friction seen twice into a proposed fix, and serves Claude Code, Codex and Antigravity
+from one folder of your own notes.
+
 ## What is kept safe
 
 - Installing into a folder that already holds notes adds NeoMyelin's folders and files next to
@@ -85,13 +105,21 @@ the one trust step your client needs.
   its own, never by deleting through it.
 - Generated lines are marked; your own lines in `Personality.md` and `Evolution.md` are never
   rewritten.
-- Nothing leaves your machine except the model calls your own client makes, and the quota reads
-  `limit` makes when you run it: Claude's usage endpoint with your Claude login (the optional
-  status line asks it too, at most every five minutes), `codex app-server` for Codex's reset
-  credits, and `agy -p /usage`, which asks Antigravity's servers for your quota without a model
-  turn; and once a day at most, a background check asks GitHub which NeoMyelin release is the
-  latest, so the session can tell you when a new one is out (`"update_notice": false` in
-  `.brain/config.json` or `NEOMYELIN_UPDATE_NOTICE=off` turns it off).
+- Nothing leaves your machine except the model calls your own client makes, quota reads (`limit`
+  and the optional status line) and a once-a-day check for a newer release, which can be turned off.
+
+<details>
+<summary>Exactly what talks to the network</summary>
+
+Nothing leaves your machine except the model calls your own client makes, and the quota reads
+`limit` makes when you run it: Claude's usage endpoint with your Claude login (the optional
+status line asks it too, at most every five minutes), `codex app-server` for Codex's reset
+credits, and `agy -p /usage`, which asks Antigravity's servers for your quota without a model
+turn; and once a day at most, a background check asks GitHub which NeoMyelin release is the
+latest, so the session can tell you when a new one is out (`"update_notice": false` in
+`.brain/config.json` or `NEOMYELIN_UPDATE_NOTICE=off` turns it off).
+
+</details>
 
 ## Requirements and status
 

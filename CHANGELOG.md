@@ -19,6 +19,16 @@ tested.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-02
+
+### Fixed
+
+- **README shows how it works:** the front page drew the session loop as four rows of text, which
+  did not show what makes it a loop. It now opens on a banner, pictures the loop (Monday's receipt
+  read at Tuesday's session start) and how a personality line is earned, says why a `CLAUDE.md` alone
+  is not the same, and folds the network details. Only the README and its images changed; nothing in
+  your vault does.
+
 ## [1.4.0] - 2026-10-27
 
 ### Added
