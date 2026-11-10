@@ -1,16 +1,18 @@
-"""prompt_recall.py: knowledge notes get their own slots, later prompts keep hits from 0.52, the
-background refresh opens no window."""
+"""prompt_recall.py: knowledge notes get their own slots, the other slots never hold a receipt, later
+prompts keep hits from 0.52, seven full lines fit under the cap, the background refresh opens no
+window."""
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
 
-from helpers import make_vault, receipt, write, write_config
+from helpers import make_vault, receipt, task, write, write_config
 
 import prompt_recall
 import recall
@@ -20,7 +22,8 @@ def row(path: str, score: float) -> dict:
     return {'path': path, 'score': score, 'preview': f'preview of {path}'}
 
 
-# recall's order (best first): receipts and a task outscore every knowledge note.
+# recall's order (best first): receipts and a task outscore every knowledge note, and five files
+# that are neither compete for the four other slots.
 WITH_KNOWLEDGE = [
     row('receipts/a.md', 0.70),
     row('receipts/b.md', 0.69),
@@ -31,6 +34,10 @@ WITH_KNOWLEDGE = [
     row('knowledge/concepts/k3.md', 0.52),
     row('knowledge/concepts/k4.md', 0.519),
     row('.brain/skills/chef/SKILL.md', 0.50),
+    row('receipts/e.md', 0.495),
+    row('500-Projects/card.md', 0.49),
+    row('200-Goals/focus.md', 0.48),
+    row('tasks/f.md', 0.47),
 ]
 WITHOUT_KNOWLEDGE = [
     row('receipts/a.md', 0.70),
@@ -38,6 +45,7 @@ WITHOUT_KNOWLEDGE = [
     row('.brain/skills/chef/SKILL.md', 0.53),
     row('500-Projects/card.md', 0.50),
 ]
+ONLY_RECEIPTS = [row('receipts/a.md', 0.70), row('receipts/b.md', 0.60)]
 
 
 def paths(rows: list[dict]) -> list[str]:
@@ -52,19 +60,24 @@ class SlotTests(unittest.TestCase):
         with mock.patch.object(recall, 'search', search):
             return paths(prompt_recall.find('where did we write about the heron nest', first)), search
 
-    def test_knowledge_first_then_two_others(self):
+    def test_knowledge_first_then_four_others_and_no_receipt(self):
         self.assertEqual(paths(prompt_recall.slots(WITH_KNOWLEDGE)), [
             'knowledge/concepts/k1.md', 'knowledge/concepts/k2.md', 'knowledge/concepts/k3.md',
-            'receipts/a.md', 'receipts/b.md'])
+            'tasks/c.md', '.brain/skills/chef/SKILL.md', '500-Projects/card.md', '200-Goals/focus.md'])
 
     def test_without_knowledge_the_others_keep_their_slots(self):
-        self.assertEqual(paths(prompt_recall.slots(WITHOUT_KNOWLEDGE)), ['receipts/a.md', 'tasks/c.md'])
+        self.assertEqual(paths(prompt_recall.slots(WITHOUT_KNOWLEDGE)),
+                         ['tasks/c.md', '.brain/skills/chef/SKILL.md', '500-Projects/card.md'])
         self.assertEqual(prompt_recall.slots([]), [])
+
+    def test_receipts_alone_show_nothing(self):
+        self.assertEqual(prompt_recall.slots(ONLY_RECEIPTS), [])
+        self.assertEqual(self.find(ONLY_RECEIPTS, first=True)[0], [])
 
     def test_fewer_knowledge_notes_than_slots(self):
         rows = [row('receipts/a.md', 0.7), row('knowledge/k.md', 0.6), row('tasks/c.md', 0.55),
                 row('receipts/d.md', 0.5)]
-        self.assertEqual(paths(prompt_recall.slots(rows)), ['knowledge/k.md', 'receipts/a.md', 'tasks/c.md'])
+        self.assertEqual(paths(prompt_recall.slots(rows)), ['knowledge/k.md', 'tasks/c.md'])
 
     def test_the_search_goes_wide(self):
         _, search = self.find(WITH_KNOWLEDGE, first=True)
@@ -74,18 +87,18 @@ class SlotTests(unittest.TestCase):
     def test_first_prompt_slots_with_and_without_knowledge(self):
         self.assertEqual(self.find(WITH_KNOWLEDGE, first=True)[0], [
             'knowledge/concepts/k1.md', 'knowledge/concepts/k2.md', 'knowledge/concepts/k3.md',
-            'receipts/a.md', 'receipts/b.md'])
-        self.assertEqual(self.find(WITHOUT_KNOWLEDGE, first=True)[0], ['receipts/a.md', 'tasks/c.md'])
+            'tasks/c.md', '.brain/skills/chef/SKILL.md', '500-Projects/card.md', '200-Goals/focus.md'])
+        self.assertEqual(self.find(WITHOUT_KNOWLEDGE, first=True)[0],
+                         ['tasks/c.md', '.brain/skills/chef/SKILL.md', '500-Projects/card.md'])
 
     def test_later_prompts_keep_hits_from_0_52(self):
         # 0.55 and 0.52 stay (0.58, the earlier bar, hid them); 0.519 does not.
         self.assertEqual(self.find(WITH_KNOWLEDGE, first=False)[0], [
-            'knowledge/concepts/k1.md', 'knowledge/concepts/k2.md', 'knowledge/concepts/k3.md',
-            'receipts/a.md', 'receipts/b.md'])
+            'knowledge/concepts/k1.md', 'knowledge/concepts/k2.md', 'knowledge/concepts/k3.md', 'tasks/c.md'])
         later = [row('knowledge/k.md', 0.519), row('receipts/a.md', 0.53), row('tasks/c.md', 0.52),
                  row('receipts/b.md', 0.51)]
-        self.assertEqual(self.find(later, first=False)[0], ['receipts/a.md', 'tasks/c.md'])
-        self.assertEqual(self.find(WITHOUT_KNOWLEDGE, first=False)[0], ['receipts/a.md', 'tasks/c.md'])
+        self.assertEqual(self.find(later, first=False)[0], ['tasks/c.md'])
+        self.assertEqual(self.find(WITHOUT_KNOWLEDGE, first=False)[0], ['tasks/c.md', '.brain/skills/chef/SKILL.md'])
 
 
 FILLER = {
@@ -99,6 +112,8 @@ FILLER = {
     'car': 'Tyres lose pressure in cold weather.',
     'desk': 'A standing desk helps the back.',
     'cat': 'The cat sleeps on the warm laptop.',
+    'kite': 'A kite needs a steady wind on the hill.',
+    'soup': 'Lentil soup thickens as it cools.',
 }
 LONG = ('Heron nest reeds marsh: {n} field notes kept over several seasons by the volunteers, with '
         'counts of eggs, fledglings, water levels, weather, predators, ringing codes and the observers '
@@ -106,10 +121,13 @@ LONG = ('Heron nest reeds marsh: {n} field notes kept over several seasons by th
 # Few distinct words, so each receipt outscores every knowledge note under the strict rule.
 RECEIPTS = ('Heron nest reeds marsh.', 'Heron nest reeds marsh and the boardwalk repairs.',
             'Heron nest reeds marsh and the boardwalk repairs before the winter storms.')
+PROMPT = 'Where is the heron nest in the marsh reeds?'
+SKILL = ('---\nname: marsh-walk\ndescription: The marsh-walk skill.\n---\n\n# Marsh walk\n\n'
+         'Plan a dawn walk to the heron nest through the marsh reeds and log what was seen.\n')
 
 
 class HookSlotTests(unittest.TestCase):
-    """The hook end to end on bm25: receipts outscore the knowledge notes and still come second."""
+    """The hook end to end on bm25: receipts outscore everything else and still take no line."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -137,31 +155,102 @@ class HookSlotTests(unittest.TestCase):
         for number, sentence in enumerate(RECEIPTS, 1):
             receipt(self.vault, f'heron-{number}', ' '.join([sentence] * 3),
                     created_at=f'2026-10-0{number}T10:00:00+00:00')
+        # Five files that are neither knowledge notes nor receipts, for four slots.
+        task(self.vault, 'heron-survey', title='Heron nest survey in the marsh reeds', status='active',
+             next_action='count the nests from the hide at first light, note the chicks, the ringed adults, '
+             'the wind, the rain gauge and any fox tracks on the path; then upload the sheet, email the '
+             'warden, order new pencils, clean the scope, charge the radio and book the minibus for '
+             'Saturday', due_at='2026-11-20')
+        task(self.vault, 'heron-boardwalk', title='Boardwalk to the heron nest across the marsh reeds and the '
+             'ditch, with a new railing, signs for the visitors and a gate at the car park', status='waiting')
+        write(self.vault / '.brain' / 'skills' / 'marsh-walk' / 'SKILL.md', SKILL)
+        write(self.vault / '500-Projects' / 'heron-reserve.md',
+              '# Heron reserve\n\nThe reserve project: the heron nest colony in the marsh reeds, its funding, '
+              'its volunteers and the long plan for the water levels, the sluice gates, the grazing cattle, '
+              'the bird hide, the school visits and the yearly report to the council. Grants, insurance, '
+              'fencing, trail maps, a donation box, volunteer rotas and a newsletter round it off.\n')
+        write(self.vault / '600-Life' / 'birding.md',
+              '# Birding\n\nWeekend birding: the heron nest by the marsh reeds, the owl box in the barn, the '
+              'swifts under the roof, the feeders in the garden, the notebook of first sightings, the '
+              'binoculars, the camera lens, the spring migration and the autumn geese. Thermos, raincoat, '
+              'wellies, field guide, snacks, a folding stool and patience for the long quiet hours.\n')
         recall.build('bm25')
 
-    def test_three_knowledge_notes_then_two_receipts_uncut(self):
-        text = prompt_recall.context_for(json.dumps({
-            'session_id': 's1', 'prompt': 'Where is the heron nest in the marsh reeds?', 'cwd': str(self.vault)}))
+    def hook(self, prompt: str = PROMPT, session: str = 's1') -> str:
+        return prompt_recall.context_for(json.dumps({'session_id': session, 'prompt': prompt,
+                                                     'cwd': str(self.vault)}))
+
+    def shown(self, text: str) -> list[str]:
+        root = self.vault.as_posix() + '/'
+        return [line.split(' (', 1)[0].split('. ', 1)[1].removeprefix(root) for line in text.splitlines()[1:]]
+
+    def test_the_receipts_do_outscore_everything_else(self):
+        # The fixture's premise: the two best hits are receipts, every receipt outscores every
+        # knowledge note, and five other files compete for four slots.
+        ranked = [item['path'] for item in prompt_recall.strict_filter(
+            PROMPT, recall.search('heron nest marsh reeds', k=40, refresh=False)[1])]
+        self.assertEqual(ranked[:2], ['receipts/heron-1.md', 'receipts/heron-2.md'])
+        self.assertLess(ranked.index('receipts/heron-3.md'), ranked.index('knowledge/concepts/heron-1.md'))
+        self.assertEqual(len([path for path in ranked if not path.startswith(('receipts/', 'knowledge/'))]), 5)
+        self.assertEqual(len(ranked), 12)
+
+    def test_three_knowledge_notes_then_four_others_and_no_receipt(self):
+        text = self.hook()
         lines = text.splitlines()
         self.assertEqual(lines[0], prompt_recall.HEADER)
-        self.assertIn('knowledge notes first, then receipts, tasks and other files', lines[0])
-        root = self.vault.as_posix()
-        shown = [line.split(' (', 1)[0].split('. ', 1)[1] for line in lines[1:]]
-        self.assertEqual(shown, [f'{root}/knowledge/concepts/heron-1.md', f'{root}/knowledge/concepts/heron-2.md',
-                                 f'{root}/knowledge/concepts/heron-3.md', f'{root}/receipts/heron-1.md',
-                                 f'{root}/receipts/heron-2.md'], text)
-        # Five hits with full previews fit under the cap (the old 1200 cut the last ones).
-        self.assertGreater(len(text), 1300)
+        self.assertIn('knowledge notes first, then tasks, skills, project cards and hub files', lines[0])
+        self.assertEqual(self.shown(text), [
+            'knowledge/concepts/heron-1.md', 'knowledge/concepts/heron-2.md', 'knowledge/concepts/heron-3.md',
+            '600-Life/birding.md', '500-Projects/heron-reserve.md', 'tasks/heron-survey.md',
+            '.brain/skills/marsh-walk/SKILL.md'], text)
+        self.assertNotIn('/receipts/', text)
+        self.assertIn('[task active, due 2026-11-20]', text)
         self.assertNotIn('[…]', text)
-        self.assertTrue(lines[-1].endswith(f"— {' '.join([RECEIPTS[1]] * 3)}"), lines[-1])
 
-    def test_the_receipts_do_outscore_the_knowledge_notes(self):
-        # The fixture's premise: in one mixed top 3 the knowledge notes would not appear.
-        ranked = prompt_recall.strict_filter('Where is the heron nest in the marsh reeds?',
-                                             recall.search('heron nest marsh reeds', k=40, refresh=False)[1])
-        self.assertEqual([item['path'] for item in ranked[:3]],
-                         ['receipts/heron-1.md', 'receipts/heron-2.md', 'receipts/heron-3.md'])
-        self.assertEqual(len(ranked), 7)
+    def test_with_no_knowledge_note_the_other_files_still_show(self):
+        shutil.rmtree(self.vault / 'knowledge')
+        recall.build('bm25')
+        self.assertEqual(self.shown(self.hook()), [
+            '600-Life/birding.md', '500-Projects/heron-reserve.md', 'tasks/heron-survey.md',
+            '.brain/skills/marsh-walk/SKILL.md'])
+
+    def test_a_vault_whose_only_hits_are_receipts_shows_nothing(self):
+        for folder in ('knowledge', 'tasks', '.brain', '500-Projects', '600-Life'):
+            shutil.rmtree(self.vault / folder)
+        recall.build('bm25')
+        self.assertEqual([row['path'] for row in prompt_recall.strict_filter(
+            PROMPT, recall.search(PROMPT, k=40, refresh=False)[1])],
+            ['receipts/heron-1.md', 'receipts/heron-2.md', 'receipts/heron-3.md'])
+        self.assertEqual(self.hook(), prompt_recall.EMPTY)
+
+
+class CapTests(unittest.TestCase):
+    """Seven hits at full preview length, with task stamps and long paths, arrive whole."""
+
+    def test_seven_full_lines_fit_under_the_cap(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        vault = Path(tmp.name) / 'vault'
+        hits = []
+        for number in range(1, 8):
+            folder = 'knowledge/concepts' if number <= 3 else 'tasks'
+            # Each line's full path is 190 characters, whatever the temporary folder's length.
+            name = f'{number}-'.ljust(190 - len(f'{vault.as_posix()}/{folder}/.md'), 'n')
+            self.assertGreater(len(name), 40)
+            if folder == 'tasks':
+                task(vault, name, title=f'Task {number}', status='waiting', due_at='2026-12-01')
+            preview = f'Preview {number}: ' + ' '.join(['wordy'] * 60)  # longer than PREVIEW_CHARS
+            hits.append({'path': f'{folder}/{name}.md', 'score': 0.9 - number / 100, 'preview': preview})
+        text = prompt_recall.format_hits(vault, hits)
+        lines = text.splitlines()
+        self.assertEqual(len(lines), 8, text)
+        self.assertNotIn('[…]', text)
+        for number, (line, hit) in enumerate(zip(lines[1:], hits), 1):
+            with self.subTest(number):
+                self.assertEqual(len(line.split(' (', 1)[0].split('. ', 1)[1]), 190)
+                self.assertTrue(line.endswith('— ' + hit['preview'][:prompt_recall.PREVIEW_CHARS]), line)
+                if number > 3:
+                    self.assertIn('[task waiting, due 2026-12-01]', line)
 
 
 class BackgroundRefreshTests(unittest.TestCase):

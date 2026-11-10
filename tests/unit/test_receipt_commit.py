@@ -13,28 +13,43 @@ import time
 import unittest
 from unittest import mock
 
-from helpers import make_vault, write, write_config
+from helpers import make_vault, remove_tree, write, write_config
 
 import receipt_commit
 
 SCRIPT = Path(receipt_commit.__file__).resolve()
 IDENTITY = '[user]\n\tname = Alex Example\n\temail = alex.example\n'
+# A wait not under test (a git call, the Stop's wait on its commit child) gets this long, however
+# loaded the machine and however short the budget a test sets for another.
+PATIENT = 60.0
 
 
 @unittest.skipIf(shutil.which('git') is None, 'git is not installed')
 class ReceiptCommitTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.base = Path(self.tmp.name)
+        self.base = Path(tempfile.mkdtemp(prefix='receipt-commit-'))
+        # Waits out a process still in the folder: on Windows a folder in use cannot be removed, and
+        # a test that failed while the git it never kills still ran also gave an ERROR (2026-11-10).
+        self.addCleanup(remove_tree, self.base)
+        self.processes: list[subprocess.Popen] = []  # started by the test; waited for at cleanup
+        self.releases: list[Path] = []  # of held hooks; let go at cleanup
+        self.addCleanup(self.let_go)
         self.vault, cfg = make_vault(self.base)
         self.gitconfig = write(self.base / 'gitconfig', IDENTITY)
-        # The machine's own git config (identity, hooks, signing, line endings) stays out.
+        # The machine's own git config (identity, hooks, signing, line endings) stays out. No git here
+        # looks above the test's folder: when the temp folder sat in a repository, a child whose vault
+        # lost its .git to cleanup staged receipts in that repository's index (2026-11-10).
         patch = mock.patch.dict(os.environ, {'NEOMYELIN_CONFIG': str(write_config(self.base, cfg)),
                                              'GIT_CONFIG_GLOBAL': str(self.gitconfig),
-                                             'GIT_CONFIG_NOSYSTEM': '1'})
+                                             'GIT_CONFIG_NOSYSTEM': '1',
+                                             'GIT_CEILING_DIRECTORIES': str(self.base)})
         patch.start()
         self.addCleanup(patch.stop)
+        # The Stop waits for its commit child as on an idle machine: under load 7 s ran out before
+        # the child committed. The tests of the budget set a short one and hold the commit.
+        budget = mock.patch.object(receipt_commit, 'BUDGET', PATIENT)
+        budget.start()
+        self.addCleanup(budget.stop)
         for name in (receipt_commit.INVOKED_ENV, *receipt_commit.GIT_LOCATION, 'GIT_AUTHOR_NAME',
                      'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'EMAIL'):
             os.environ.pop(name, None)
@@ -85,6 +100,46 @@ class ReceiptCommitTests(unittest.TestCase):
     def hook(self, name: str, body: str) -> None:
         write(self.git_dir() / 'hooks' / name, f'#!/bin/sh\n{body}').chmod(0o755)
 
+    def held_hook(self, name: str, seconds: int, then: str = '') -> tuple[Path, Path]:
+        """Hook `name` sleeps `seconds` like a slow lint or network, and past that until the test lets
+        it go, then runs `then`; its two marker files. The hold makes it outlast the call under test
+        however loaded the machine. It lets itself go after a minute or more, so a regression that
+        waits for it turns red instead of hanging the gate."""
+        started, release = self.base / f'{name}.started', self.base / f'{name}.release'
+        self.releases.append(release)
+        # A hook runs in the top folder of the work tree, the vault; the markers sit beside it.
+        self.hook(name, f': > ../{started.name}\nsleep {seconds}\nn=0\n'
+                        f'while [ ! -e ../{release.name} ] && [ "$n" -lt 300 ]; do sleep 0.2; n=$((n + 1)); done\n'
+                        f'{then}')
+        return started, release
+
+    def let_go(self) -> None:
+        """Also after a failure: release every held hook, then wait for what the test started."""
+        for release in self.releases:
+            write(release, '')
+        for process in self.processes:
+            process.wait(timeout=120)
+
+    def patient(self, *timed: str):
+        """Patch `git` so every call but the subcommands in `timed` gets PATIENT seconds: a budget a
+        test shortens for one call must not end another that load made slow (a killed status is a skip)."""
+        real = receipt_commit.git
+
+        def call(vault, *args, timeout, **kwargs):
+            return real(vault, *args, timeout=timeout if args[0] in timed else max(timeout, PATIENT), **kwargs)
+
+        return mock.patch.object(receipt_commit, 'git', call)
+
+    def assert_still_committing(self, process: subprocess.Popen, head: str, started: Path) -> None:
+        """The call returned while `process` commits on, held in its hook: alive, HEAD unchanged,
+        index.lock held. Nothing here measures time; the hold decides when it ends."""
+        self.assertIsNone(process.poll(), self.log_text())
+        self.assertEqual(self.head(), head)
+        self.wait_for(started.exists, 'the pre-commit hook started')
+        self.assertTrue((self.git_dir() / 'index.lock').exists())
+        self.assertIsNone(process.poll(), self.log_text())
+        self.assertEqual(self.head(), head)
+
     def wait_for(self, done, what: str) -> None:
         deadline = time.monotonic() + 60
         while not done() and time.monotonic() < deadline:
@@ -93,7 +148,7 @@ class ReceiptCommitTests(unittest.TestCase):
 
     def spawned(self) -> tuple[list[subprocess.Popen], mock._patch]:
         """Patch `spawn` so the real children start and the test can wait for them."""
-        children: list[subprocess.Popen] = []
+        children = self.processes
         real = receipt_commit.spawn
 
         def record(*args):
@@ -246,23 +301,25 @@ class ReceiptCommitTests(unittest.TestCase):
         branch = self.init_repo()
         remote = self.remote()
         self.git('push', '-q', '-u', 'origin', branch)
-        # A slow network: the push takes 5 s; the Stop (and the harness's pipes) must not wait for it.
-        hook = write(Path(self.git('rev-parse', '--absolute-git-dir')) / 'hooks' / 'pre-push',
-                     '#!/bin/sh\nsleep 5\n')
-        hook.chmod(0o755)
+        # A slow network: the push takes 5 s and more; the Stop (and the harness's pipes) must not wait for it.
+        started, release = self.held_hook('pre-push', 5)
         write(self.vault / 'receipts' / 'new.md', 'receipt\n')
         payload = json.dumps({'session_id': 's1', 'hook_event_name': 'Stop', 'stop_hook_active': False})
-        started = time.monotonic()
-        result = subprocess.run([sys.executable, str(SCRIPT)], input=payload, capture_output=True,
-                                text=True, encoding='utf-8', timeout=60)
-        self.assertLess(time.monotonic() - started, 4)
+        # A fresh process given the payload on stdin, its pipes captured, as the harness runs the hook.
+        # Its budget is out of reach, so it ends only when its commit child has ended, however
+        # loaded the machine: a commit child that waited for the push would hold it as long as the hook.
+        code = ('import sys; sys.path.insert(0, sys.argv[1]); import receipt_commit; '
+                'receipt_commit.BUDGET = 120.0; raise SystemExit(receipt_commit.main([]))')
+        result = subprocess.run([sys.executable, '-c', code, str(SCRIPT.parent)], input=payload,
+                                capture_output=True, text=True, encoding='utf-8', timeout=300)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
-        self.assertEqual(self.committed(), {'receipts/new.md'})
+        self.assertEqual(self.committed(), {'receipts/new.md'})  # committed before the Stop ended
         self.assertNotEqual(self.git('rev-parse', branch, cwd=remote), self.head())  # still pushing
-        deadline = time.monotonic() + 60
-        while self.git('rev-parse', branch, cwd=remote) != self.head() and time.monotonic() < deadline:
-            time.sleep(0.2)
-        self.assertEqual(self.git('rev-parse', branch, cwd=remote), self.head(), self.log_text())
+        self.wait_for(started.exists, 'the push started')  # in the background, the Stop long gone
+        self.assertNotEqual(self.git('rev-parse', branch, cwd=remote), self.head())
+        write(release, '')
+        self.wait_for(lambda: self.git('rev-parse', branch, cwd=remote) == self.head(), 'pushed')
+        self.wait_for(lambda: f'push: {branch}' in self.log_text(), 'push logged')
 
     # -- never blocks ----------------------------------------------------------------------
 
@@ -444,14 +501,13 @@ class ReceiptCommitTests(unittest.TestCase):
         head = self.head()
         remote = self.remote()
         self.git('push', '-q', '-u', 'origin', branch)
-        self.hook('pre-commit', 'sleep 3\n')
+        started, release = self.held_hook('pre-commit', 3)
         write(self.vault / 'receipts' / 'new.md', 'receipt\n')
         children, spawn = self.spawned()
-        started = time.monotonic()
-        with mock.patch.object(receipt_commit, 'BUDGET', 1.0), spawn:
+        with mock.patch.object(receipt_commit, 'BUDGET', 1.0), self.patient(), spawn:
             self.assertEqual(self.stop(), 0)
-        self.assertLess(time.monotonic() - started, 2.5)
-        self.assertEqual(self.head(), head)  # the Stop did not wait for the commit
+        self.assert_still_committing(children[0], head, started)  # the Stop did not wait for the commit
+        write(release, '')
         self.assertEqual(children[0].wait(timeout=60), 0)
         self.assertEqual(self.committed(), {'receipts/new.md'})
         self.wait_for(lambda: self.git('rev-parse', branch, cwd=remote) == self.head(), 'pushed')
@@ -461,13 +517,13 @@ class ReceiptCommitTests(unittest.TestCase):
     def test_a_slow_commit_that_fails_after_the_stop_is_still_recorded(self):
         self.init_repo()
         head = self.head()
-        self.hook('pre-commit', 'sleep 3\necho lint failed >&2\nexit 1\n')
+        started, release = self.held_hook('pre-commit', 3, 'echo lint failed >&2\nexit 1\n')
         write(self.vault / 'receipts' / 'new.md', 'receipt\n')
         children, spawn = self.spawned()
-        started = time.monotonic()
-        with mock.patch.object(receipt_commit, 'BUDGET', 1.0), spawn:
+        with mock.patch.object(receipt_commit, 'BUDGET', 1.0), self.patient(), spawn:
             self.assertEqual(self.stop(), 0)
-        self.assertLess(time.monotonic() - started, 2.5)
+        self.assert_still_committing(children[0], head, started)  # it fails only after the Stop
+        write(release, '')
         self.assertEqual(children[0].wait(timeout=60), 0)
         self.assert_untouched(head)
         self.assertIn('receipt commit failed: lint failed', self.log_text())
@@ -476,27 +532,28 @@ class ReceiptCommitTests(unittest.TestCase):
     def test_a_commit_past_the_childs_timeout_is_left_to_finish_never_killed(self):
         # A killed `git commit` leaves index.lock behind and every later git command fails.
         self.init_repo()
+        head = self.head()
         # It prints after the child has returned: a closed pipe would kill it then.
-        self.hook('pre-commit', 'sleep 3\necho lint passed\necho lint detail >&2\n')
+        started, release = self.held_hook('pre-commit', 3, 'echo lint passed\necho lint detail >&2\n')
         write(self.vault / 'receipts' / 'new.md', 'receipt\n')
         lock = self.git_dir() / 'index.lock'
-        started_git = []
         real_popen = subprocess.Popen
 
         def record(*args, **kwargs):
-            started_git.append(real_popen(*args, **kwargs))
-            return started_git[-1]
+            self.processes.append(real_popen(*args, **kwargs))
+            return self.processes[-1]
 
-        started = time.monotonic()
-        with mock.patch.object(receipt_commit, 'CHILD_TIMEOUT', 1.0), \
+        # Only the commit gets the short timeout: under load the git calls before it may take longer.
+        with mock.patch.object(receipt_commit, 'CHILD_TIMEOUT', 1.0), self.patient('commit'), \
                 mock.patch.object(receipt_commit.subprocess, 'Popen', side_effect=record):
             self.assertEqual(self.commit(), 0)
-        self.assertLess(time.monotonic() - started, 2.5)
+        commit = next(process for process in self.processes if 'commit' in process.args)
+        self.assert_still_committing(commit, head, started)
         # Its outcome is not seen, so it is a warning, not a quiet skip.
         self.assertIn('receipt commit failed: git commit gave no answer', self.log_text())
         self.assertEqual(len(self.warnings()), 1, self.warnings())
-        commit = next(process for process in started_git if 'commit' in process.args)
-        self.assertEqual(commit.wait(timeout=30), 0)  # it finished by itself, it was not killed
+        write(release, '')
+        self.assertEqual(commit.wait(timeout=60), 0)  # it finished by itself, it was not killed
         self.assertEqual(self.committed(), {'receipts/new.md'})
         self.assertFalse(lock.exists())
 

@@ -252,6 +252,14 @@ def record_reminders(harness: str, key: str, vault: Path) -> tuple[str, str]:
     return reminder(kind, harness, vault, session), ''
 
 
+# After a Stop block the user sees the old answer, the hook line, then the next message; comparing
+# the two cost time and confused (measured in the original brain, 2026-11-03). So the extra turn ends
+# with the whole answer again.
+REWRITE_TAIL = ("Then, as your last message, write your whole answer to the user again from the top: fix "
+                "what this changed and repeat the rest, even if nothing changed. They read only the "
+                "message below this hook, not the one above it.")
+
+
 def on_stop(harness: str, payload: dict) -> dict | None:
     """The Stop answer for Claude and Codex; agy's reminders are queued (see agy_reminder)."""
     if payload.get('stop_hook_active') is True:
@@ -274,7 +282,7 @@ def on_stop(harness: str, payload: dict) -> dict | None:
                 (STATE_DIR / f'{key}.{suffix}').write_text(text, encoding='utf-8', newline='\n')
         return None
     texts = [text for text in (language_reminder(key, payload, cfg), receipt_text, learning_text) if text]
-    return {'decision': 'block', 'reason': '\n\n'.join(texts)} if texts else None
+    return {'decision': 'block', 'reason': '\n\n'.join(texts + [REWRITE_TAIL])} if texts else None
 
 
 def _take(path: Path) -> str:

@@ -58,6 +58,8 @@ class ReceiptReminderTests(unittest.TestCase):
         self.assertTrue(reason.startswith('[Memory: Receipt] Files changed in this session'), reason)
         self.assertIn(f'"{self.vault.as_posix()}/brain.py" receipt --file <receipt.json> --harness claude', reason)
         self.assertIn(f'"session": "{session_value("s1")}"', reason)
+        # The extra turn ends with the whole answer again, since the user reads only what follows the hook.
+        self.assertTrue(reason.endswith(receipt_gate.REWRITE_TAIL), reason)
         self.assertIsNone(self.stop(stop_hook_active=True))
         self.assertIsNone(self.stop())  # the second Stop of the session passes
         self.edit(times=3)

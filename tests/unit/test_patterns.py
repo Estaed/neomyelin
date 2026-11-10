@@ -114,6 +114,12 @@ class EvolutionTests(unittest.TestCase):
         changed, added = patterns.add_evidence(text, sleeping, [extra])
         self.assertTrue(added)
         self.assertIn(f"`{extra['ref']}`", changed)
+        # One proof ahead is not enough: the binding pattern keeps its place (HYSTERESIS).
+        _, _, woke = patterns.rank(changed, 1)
+        self.assertEqual(woke, [])
+        sleeping = next(item for item in patterns.entries(changed) if item['status'] == 'sleeping')
+        changed, added = patterns.add_evidence(changed, sleeping, [self.observation('extra-2', 8)])
+        self.assertTrue(added)
         reranked, _, woke = patterns.rank(changed, 1)
         self.assertEqual(woke, [sleeping['title']])
         self.assertEqual(len([item for item in patterns.entries(reranked)

@@ -78,24 +78,29 @@ class RecallHookTests(unittest.TestCase):
         self.hook('quantum chromodynamics and the gluon plasma')
         self.assertIn(self.note('knowledge/otter.md'), self.hook(OTTER_PROMPT))
 
-    def test_tasks_and_receipts_carry_their_state(self):
+    def test_a_task_carries_its_state_read_from_the_file_now(self):
         task(self.vault, 'otter-survey', title='Otter survey in the kelp', status='active',
              next_action='count the sea otter rafts', due_at='2026-10-02')
         recall.build('bm25')
         text = self.hook('When is the sea otter survey in the kelp due?')
         self.assertIn(f'{self.note("tasks/otter-survey.md")} (', text)
         self.assertIn('[task active, due 2026-10-02]', text)
+        # The index is not rebuilt: the stamp reads the file, not the index.
+        task(self.vault, 'otter-survey', title='Otter survey in the kelp', status='waiting',
+             next_action='count the sea otter rafts', due_at='2026-10-09')
+        text = self.hook('And when is that sea otter survey in the kelp due now?')
+        self.assertIn('[task waiting, due 2026-10-09]', text)
 
-    def test_a_receipt_hit_is_a_dated_snapshot(self):
+    def test_a_receipt_never_takes_a_line(self):
         receipt(self.vault, 'census', '[Coast] The sea otter census moved to the kelp bay',
                 event_id='e1', created_at='2026-09-30T10:00:00+00:00', refs=['AGENTS.md'])
         recall.build('bm25')
         text = self.hook('When did the sea otter census move to the kelp bay?')
-        self.assertIn(f'{self.note("receipts/census.md")} (', text)
-        self.assertIn('[receipt 2026-09-30, historical]', text)
+        self.assertIn(self.note('knowledge/otter.md'), text)
+        self.assertNotIn('census', text)
+        self.assertNotIn('historical', text)
 
     def test_a_stamp_survives_an_unreadable_file(self):
-        self.assertEqual(prompt_recall._stamp(self.vault, 'receipts/gone.md'), ' [receipt, historical]')
         self.assertEqual(prompt_recall._stamp(self.vault, 'tasks/gone.md'), ' [task]')
         self.assertEqual(prompt_recall._stamp(self.vault, 'knowledge/gone.md'), '')
 

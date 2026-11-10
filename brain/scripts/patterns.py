@@ -312,11 +312,18 @@ def _line(item: dict) -> str:
             f"evidence: .brain/patterns.md) <!-- neomyelin:{item['id'] or identifier(item['title'])} -->")
 
 
+# A binding pattern counts this much extra evidence when ranked, so a sleeping one must lead by two
+# to take its place. With ties alone, Personality lines went out and back in on alternate nights as
+# counts grew by one (the original brain, 2026-10-19..27: 18 swaps in nine nights, 0 with this).
+HYSTERESIS = 1
+
+
 def rank(text: str, budget: int = DEFAULT_BUDGET) -> tuple[str, list[str], list[str]]:
-    """Keep the strongest fitting patterns binding; sleeping evidence can wake them."""
+    """Keep the strongest fitting patterns binding; sleeping evidence can wake them once it leads
+    a binding one by more than HYSTERESIS."""
     pool = [item for item in entries(text) if item['status'] in ('active', 'sleeping')]
-    ordered = sorted(pool, key=lambda item: (-len(item['evidence']), item['status'] != 'active',
-                                             item['start']))
+    ordered = sorted(pool, key=lambda item: (-(len(item['evidence']) + (HYSTERESIS if item['status'] == 'active' else 0)),
+                                             item['status'] != 'active', item['start']))
     selected, used = set(), 0
     for index, item in enumerate(ordered):
         size = len((_line(item) + '\n').encode('utf-8'))

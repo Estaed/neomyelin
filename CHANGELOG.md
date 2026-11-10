@@ -19,6 +19,44 @@ tested.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-10
+
+### Added
+
+- **"Update NeoMyelin" always has an answer:** the instruction block in your vault's `AGENTS.md`
+  now says where an update request leads (the Updating section of `INSTALL.md`), so your assistant
+  knows it in every session, not only on the day the update notice appears.
+- **A blocked answer is written again in full:** when the receipt reminder stops a turn, it now asks
+  the assistant to write its whole answer again as the last message, so you read one complete answer
+  below the reminder instead of comparing two.
+
+### Changed
+
+- **The recall block under your message shows what the work needs:** up to 3 knowledge notes, then
+  up to 4 tasks, skills, project cards and hub files. Receipts no longer take those lines (history
+  stays in the session-start `[Memory: Last Receipt]` line), and the block is long enough that all
+  seven lines arrive whole. Measured on the original brain's blind set: needed files shown rose from
+  9 to 12 of 21.
+- **Personality lines stop flickering:** a sleeping pattern now has to lead a binding one by two
+  proofs, not one, to take its place, so a line no longer drops out and comes back on alternate
+  nights as counts grow.
+
+### Fixed
+
+- **The release check reads every file:** the personal-data grep asked git for its file list
+  whenever it ran inside any git checkout; a release unpacked in a temp folder that an enclosing
+  checkout ignores was listed as no files and passed unread. It now uses git's list only at the top
+  of a checkout and reads every file anywhere else.
+- **Tests no longer fail by chance on a busy machine:** four timing tests asserted wall-clock bounds
+  that load could break; they now prove the same thing (a slow commit is left running, never
+  killed) by watching the commit itself.
+
+### Security
+
+- **Local permissions stay out of commits:** `.claude/settings.local.json` keeps the commands you
+  approved, and one of them can hold a pasted key. This repository now ignores the file in every
+  folder, and its staged check refuses it even after a forced `git add`.
+
 ## [1.4.1] - 2026-11-02
 
 ### Fixed

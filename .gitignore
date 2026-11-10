@@ -1,4 +1,6 @@
 .codex/hooks.json
+# Claude Code's approved commands, which can hold a pasted key; .claude/settings.json stays shareable
+**/.claude/settings.local.json
 # Local caches (format references, scratch downloads)
 .cache/
 __pycache__/

@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import shutil
+import stat
 import sys
+import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +22,31 @@ def write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding='utf-8')
     return path
+
+
+def remove_tree(path: Path, patience: float = 60.0) -> None:
+    """Remove a test's temporary folder once nothing holds it, git's read-only objects included.
+
+    On Windows a folder that a process still runs in, or a file it holds open, cannot be removed:
+    a detached child writing its last log line, a git the test left running on purpose. Removal is
+    retried for `patience` seconds; past that the error is raised (a process that did not end).
+    """
+    def writable(function, name, _error) -> None:
+        try:
+            os.chmod(name, stat.S_IWRITE)  # git writes its objects read-only
+            function(name)
+        except FileNotFoundError:
+            pass  # gone meanwhile
+
+    handler = {'onexc': writable} if sys.version_info >= (3, 12) else {'onerror': writable}
+    deadline = time.monotonic() + patience
+    while os.path.lexists(path):
+        try:
+            shutil.rmtree(path, **handler)
+        except OSError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.2)
 
 
 def task(vault: Path, name: str, **metadata) -> Path:

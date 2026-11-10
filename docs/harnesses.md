@@ -126,8 +126,8 @@ for a snap with one line saying so, and still writes the instruction block into 
 
 - **Recall** (`prompt_recall.py`) searches with recall's engine without waiting for indexing (a
   detached `recall.py --update`, no console window, at most every 5 minutes), within an 8-second
-  budget. It takes 40 candidates and shows up to 3 knowledge notes first, then up to 2 of
-  everything else (receipts, tasks, skills, hub files); skills' `SKILL.md` files are indexed. With
+  budget. It takes 40 candidates and shows up to 3 knowledge notes first, then up to 4 of
+  everything else but receipts (tasks, skills, project cards, hub files); skills' `SKILL.md` files are indexed. With
   Ollama: a 0.48 floor on the session's first prompt and 0.52 later (the author's 30-question blind
   set on the same `bge-m3`: 0.58 hid 10 of 21 knowledge targets; noise not measured). A prompt
   naming one of the vault's skills (not an everyday-word name from config) also gets a `[Skill]`
